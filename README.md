@@ -10,7 +10,7 @@ Sky background modelling for inidividual frames with Galactic Cirrus taken by Dr
 - photutils>=0.7.2
 - scikit-learn>=0.24.2
 - scikit-image>=0.19.2
-- reproject>0.9
+- reproject>=0.9
 - tqdm
 - joblib
 
@@ -23,7 +23,7 @@ conda install -c conda-forge openjdk
 
 ```bash
 cd <install directory>
-git clone https://github.com/NGC4676/DFCirrus.git
+git clone https://github.com/DragonflyTelescope/DFCirrus.git
 cd DFCirrus
 pip install -e .
 ```
