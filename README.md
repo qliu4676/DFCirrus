@@ -14,9 +14,6 @@ Sky background modelling for inidividual frames with Galactic Cirrus taken by Dr
 - tqdm
 - joblib
 
-```bash
-conda install -c conda-forge openjdk
-```
 
 ### Installation
 ---
