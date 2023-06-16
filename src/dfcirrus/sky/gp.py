@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+import matplotlib.patheffects as pe
 
 from astropy.io import fits
 from astropy.wcs import WCS

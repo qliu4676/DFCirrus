@@ -8,7 +8,7 @@ import numpy as np
 
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.stats import sigma_clip, mad_std
+from astropy.stats import sigma_clip, SigmaClip, mad_std
 
 from photutils.background import SExtractorBackground
     
