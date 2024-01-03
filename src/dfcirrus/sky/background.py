@@ -1,5 +1,6 @@
 import os
 import time
+import itertools
 from tqdm import tqdm
 
 import numpy as np
@@ -8,6 +9,9 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.stats import sigma_clip, SigmaClip, mad_std
+from astropy.modeling import (models, fitting, Fittable2DModel, Parameter)
+
+from skimage.transform import resize
 
 from astropy.utils.exceptions import AstropyUserWarning
 import warnings
@@ -63,9 +67,13 @@ class Worker:
                           scale=0.25,
                           model='radiance',
                           poly_deg_dust=None,
-                          sn_thre=2, b_size=128):
+                          sn_thre=2, b_size=128,
+                          exclude_dust=False,
+                          init_models=None):
         """ 
         Do Sky + Dust compound background modeling.
+        The dust and sky are modelled by 2D polynomials.
+        Dust is fitted first and added to the fitting of sky.
         
         Parameters
         ----------
@@ -84,11 +92,10 @@ class Worker:
             
         The sky model is stored as self.sky_model.
         """
-        
-        from astropy.modeling import (models, fitting, Fittable2DModel, Parameter)
-        from skimage.transform import resize
 
         self.scale = scale
+        self.poly_deg = poly_deg
+        self.poly_deg_dust = poly_deg_dust
         
         wcs_ds = self.downsample_wcs(scale)
         self.wcs_ds = wcs_ds
@@ -109,6 +116,7 @@ class Worker:
         sky_val = np.nanmedian(bkg_ds)
         
         self.bkg_ds = bkg_ds
+        self.sky_val = sky_val
 
         # Retrieve Planck dust radiance map
         dust_model_map = self.pla_map.reproject(wcs_ds, shape_ds, model=model)
@@ -120,42 +128,67 @@ class Worker:
             factor = 1e5
         
         dust_map = dust_model_map * factor
-            
         self.dust_map = dust_map
         
         # Downsampled Meshgrid
         isfinite = np.isfinite(bkg_ds)
         yy_ds, xx_ds = np.indices(bkg_ds.shape)
         
-        # Fit dust map with n-th polynomial model
-        if poly_deg_dust is None:
-            poly_deg_dust = poly_deg + 1
-        p_dust_init = models.Polynomial2D(degree=poly_deg_dust)
-        fit_p_dust = fitting.LevMarLSQFitter()
-        p_dust = fit_p_dust(p_dust_init, xx_ds, yy_ds, dust_map)
+#        import time
+#        start = time.time()
         
-        # Evaluate on the grid
-        dust_model = p_dust(xx_ds, yy_ds)
+        if exclude_dust:
+            dust_model = np.zeros_like(bkg_ds)
+        else:
+            if init_models is not None:
+                p_dust_init = init_models['poly_dust_init']
+            else:
+                # Fit dust map with n-th polynomial model
+                if poly_deg_dust is None:
+                    poly_deg_dust = poly_deg + 1
+                p_dust_init = models.Polynomial2D(degree=poly_deg_dust)
+            
+            self.p_dust_init = p_dust_init
+            
+            # Run Fitting
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', AstropyUserWarning)
+                fit_p_dust = fitting.LevMarLSQFitter()
+                p_dust = fit_p_dust(p_dust_init, xx_ds, yy_ds, dust_map)
+            
+            self.p_dust = p_dust
+            
+            # Evaluate on the grid
+            dust_model = p_dust(xx_ds, yy_ds)
+            
         self.dust_model = dust_model
 
         # Define a custom model
         class Dust_Model(Fittable2DModel):
-            amp = Parameter(default=1)
+            amp = Parameter(default=0, fixed=exclude_dust)
 
             @staticmethod
             def evaluate(x, y, amp):
                 return amp * dust_model[isfinite]
         
-        # Initialize poly sky + dust compound model for fitting
-        m_init = models.Polynomial2D(degree=poly_deg, c0_0=sky_val) + Dust_Model()
-        m_init.amp_1.min = 0
-        #m_init.c0_0_0.min = 0
+        if init_models is not None:
+            m_init = init_models['compound_init']
+        else:
+            # Initialize poly sky + dust compound model for fitting
+            m_init = models.Polynomial2D(degree=poly_deg, c0_0=sky_val) + Dust_Model()
+            m_init.amp_1.min = 0
+            #m_init.c0_0_0.min = 0
 
+        self.compound_init = m_init
+        
         # Run fitting
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', AstropyUserWarning)
             fit_m = fitting.LevMarLSQFitter()
             m_comp = fit_m(m_init, xx_ds[isfinite], yy_ds[isfinite], bkg_ds[isfinite])
+        
+#        end = time.time()
+#        print(end-start)
         
         # m_comp is the mapping function
         self.model_compound = m_comp
@@ -167,7 +200,36 @@ class Worker:
 
         self.sky_model = sky_model
         
+        self.run_fitting = True
+        
+        # Fetch fitted coefficients
+        self.get_coeff_matrix()
+    
+    
+    def get_coeff_matrix(self):
+
+        """
+        Reshape fitted polynomial coefficients into maxtrix form.
+        """
+        
+        if self.run_fitting is False:
+            raise Exception('Sky model fitting has not been runned!')
+        
+        deg = self.poly_deg
+        
+        ij = itertools.product(range(deg+1), range(deg+1))
+        ij = np.array(list(ij))
+        
+        coeff_matrix = np.zeros([deg+1, deg+1])
+
+        for (i, j) in ij:
+            coeff = getattr(self.model_compound.left, f'c{i}_{j}', None)
+            if coeff!=None:
+                coeff_matrix[i,j] = coeff.value
                 
+        self.sky_coeff = coeff_matrix
+
+         
 ### Dragonfly pipeine specfic helper function ###
 
 def sky_dust_modeling_by_frame(master_light,
