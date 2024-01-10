@@ -26,7 +26,7 @@ from .dust import PlanckImage
 class Worker:
     """ A worker and container for the background modeling. """
     
-    def __init__(self, frame, PLA_map=None, mask=None):
+    def __init__(self, frame, wcs=None, PLA_map=None, mask=None):
                  
         """
         Parameters
@@ -50,8 +50,9 @@ class Worker:
         self.mask = mask
 
         self.shape = self.data.shape
-
-        self.wcs = WCS(self.header, relax=True)
+        
+        if wcs is None:
+            self.wcs = WCS(self.header, relax=True)
 
         # Read Planck dust model map
         self.pla_map = PlanckImage(PLA_map)
