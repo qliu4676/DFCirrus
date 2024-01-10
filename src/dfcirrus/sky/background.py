@@ -53,6 +53,8 @@ class Worker:
         
         if wcs is None:
             self.wcs = WCS(self.header, relax=True)
+        else:
+            self.wcs = wcs
 
         # Read Planck dust model map
         self.pla_map = PlanckImage(PLA_map)
