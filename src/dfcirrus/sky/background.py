@@ -26,34 +26,44 @@ from .dust import PlanckImage
 class Worker:
     """ A worker and container for the background modeling. """
     
-    def __init__(self, frame, wcs=None, PLA_map=None, mask=None):
+    def __init__(self, path_or_pixels, wcs=None,
+                 PLA_map=None, mask=None):
                  
         """
         Parameters
         ----------
-        frame: str
-            Frame path.
+        path_or_pixels : str or ndarray
+            An image file name or numpy array of its pixels.
+        wcs: astropy.wcs.wcs
+            Astropy wcs. If None, needs to be in the file header.
         PLA_map: str
             Path of Planck dust model.
         mask: np.ndarray, optional
             Mask map.
         """
-                 
-        self.file_path = frame
+        
+        
+        # Read the fits file by path
+        if type(path_or_pixels) == str or type(path_or_pixels) == np.str_:
+            self.file_path = path_or_pixels
 
-        # Get data and header
-        with fits.open(frame) as hdul:
-            self.data = hdul[0].data
-            self.header = hdul[0].header
-            hdul.close()
+            # Get data and header
+            with fits.open(path_or_pixels) as hdul:
+                self.data = hdul[0].data
+                self.header = hdul[0].header
+                self.wcs = WCS(self.header, relax=True)
+                hdul.close()
+        else:
+            self.data = path_or_pixels
+            self.file_path = None
+            self.header = None
+            if wcs is None:
+                raise Exception('Array is given but WCS is missing!')
         
         self.mask = mask
-
         self.shape = self.data.shape
         
-        if wcs is None:
-            self.wcs = WCS(self.header, relax=True)
-        else:
+        if wcs is not None:
             self.wcs = wcs
 
         # Read Planck dust model map
