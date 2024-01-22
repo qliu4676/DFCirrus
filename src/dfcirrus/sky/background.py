@@ -73,45 +73,36 @@ class Worker:
         """ Downsample WCS. """
         from .utils import downsample_wcs
         wcs_ds = downsample_wcs(self.wcs, scale=scale)
+        self.wcs_ds = wcs_ds
         return wcs_ds
-
-    def sky_dust_modeling(self,
-                          poly_deg=2,
-                          scale=0.25,
-                          model='radiance',
-                          poly_deg_dust=None,
-                          sn_thre=2, b_size=128,
-                          exclude_dust=False,
-                          init_models=None):
-        """ 
-        Do Sky + Dust compound background modeling.
-        The dust and sky are modelled by 2D polynomials.
-        Dust is fitted first and added to the fitting of sky.
+        
+    def initialize(self,
+                   model='radiance',
+                   scale=0.25,
+                   sn_thre=2,
+                   b_size=128):
+        """
+        Initialization for sky modeling.
+        1. downsampling
+        2. reproject dust maps
         
         Parameters
         ----------
-        poly_deg: int, opional, default 2
-            Polynomial degree of sky model.
         scale: float, opional, default 0.25
             Downsampling scale.
         model: 'radiance' or 'tau'
             Planck dust model in use.
-        poly_deg_dust: int, opional, default poly_deg+1
-            Polynomial degree of dust model.
+        scale: float, opional, default 0.25
+            Downsampling scale.
         sn_thre: float, opional, default 2
             SNR threshold for source masking.
         b_size: int, opional, default 128
             Box size used for extracting background.
-            
-        The sky model is stored as self.sky_model.
         """
-
+        
         self.scale = scale
-        self.poly_deg = poly_deg
-        self.poly_deg_dust = poly_deg_dust
         
         wcs_ds = self.downsample_wcs(scale)
-        self.wcs_ds = wcs_ds
         
         # Get mask map and evaluate small-scale background
         mask_bright, bkg = make_mask_map(self.data, sn_thre=sn_thre, b_size=b_size)
@@ -125,33 +116,115 @@ class Worker:
         shape_ds = int(self.shape[0]*scale), int(self.shape[1]*scale)
         self.shape_ds = shape_ds
         
-        bkg_ds = resize(bkg, output_shape=shape_ds, order=3)
-        sky_val = np.nanmedian(bkg_ds)
-        
-        self.bkg_ds = bkg_ds
-        self.sky_val = sky_val
+        self.bkg_ds = resize(bkg, output_shape=shape_ds, order=3)
+        self.sky_val = np.nanmedian(self.bkg_ds)
 
         # Retrieve Planck dust radiance map
-        dust_model_map = self.pla_map.reproject(wcs_ds, shape_ds, model=model)
+        pla_map = self.pla_map
+        planck_dust_map = pla_map.reproject(wcs_ds, shape_ds, model=model)
         
-        # Multiply the model with a order-of-magnitude factor
+        # Multiply the model with a factor to maintain float precision
         if model == 'radiance':
             factor = 1e7
         elif model == 'tau':
             factor = 1e5
         
-        dust_map = dust_model_map * factor
-        self.dust_map = dust_map
+        self.dust_map = planck_dust_map * factor
+        
+        self.initialized = True
+            
+    def sky_dust_modeling(self,
+                          poly_deg=2,
+                          poly_deg_dust=None,
+                          model='radiance',
+                          scale=0.25,
+                          sn_thre=2,
+                          b_size=128,
+                          dust_ratio=None,
+                          init_models=None):
+        """
+        Do Sky + Dust compound background modeling.
+        The dust and sky are modelled by 2D polynomials.
+        Dust is fitted first and added to the fitting of sky.
+        
+        Parameters
+        ----------
+        poly_deg: int, opional, default 2
+            Polynomial degree of sky model.
+        poly_deg_dust: int, opional, default poly_deg+1
+            Polynomial degree of dust model.
+        model: 'radiance' or 'tau'
+            Planck dust model in use.
+        scale: float, opional, default 0.25
+            Downsampling scale.
+        sn_thre: float, opional, default 2
+            SNR threshold for source masking.
+        b_size: int, opional, default 128
+            Box size used for extracting background.
+        dust_ratio: float, optional, default None
+            Dust ratio fixed if given.
+        init_models: dict, optional, default None
+            Dictionary which contains two keys.
+                'poly_dust_init'
+                'compound_init'
+            If given, the given model will be used.
+        The sky model is stored as self.sky_model.
+        """
+        
+        # Prepare for modeling
+        self.initialize(model=model, scale=scale,
+                        sn_thre=sn_thre, b_size=b_size)
+        
+        self.run_fitting(poly_deg=poly_deg,
+                         poly_deg_dust=poly_deg_dust,
+                         dust_ratio=dust_ratio,
+                         init_models=init_models)
+        
+        # Fetch fitted coefficients
+        self.get_coeff_matrix()
+
+    def run_fitting(self,
+                    poly_deg=2,
+                    poly_deg_dust=None,
+                    dust_ratio=None,
+                    init_models=None):
+    
+        """
+        Run sky + dust polynomial fitting.
+        
+        Parameters
+        ----------
+        poly_deg: int, opional, default 2
+            Polynomial degree of sky model.
+        poly_deg_dust: int, opional, default poly_deg+1
+            Polynomial degree of dust model.
+        dust_ratio: float, optional, default None
+            Dust ratio fixed if given.
+        init_models: dict, optional, default None
+            Dictionary which contains two keys.
+                'poly_dust_init'
+                'compound_init'
+            If given, the given model will be used.
+        
+        """
+        
+        self.poly_deg = poly_deg
+        self.poly_deg_dust = poly_deg_dust
+        
+        if self.initialized is False:
+            raise Exception('Initialization has not been runned!')
+            
+        dust_map = self.dust_map
         
         # Downsampled Meshgrid
+        bkg_ds = self.bkg_ds
         isfinite = np.isfinite(bkg_ds)
         yy_ds, xx_ds = np.indices(bkg_ds.shape)
         
-#        import time
-#        start = time.time()
-        
-        if exclude_dust:
-            dust_model = np.zeros_like(bkg_ds)
+        if dust_ratio==0:
+            # Dust model will not be included.
+            # Equivalent to common polynomial sky model.
+            dust_model = np.zeros_like(self.bkg_ds)
         else:
             if init_models is not None:
                 p_dust_init = init_models['poly_dust_init']
@@ -163,7 +236,7 @@ class Worker:
             
             self.p_dust_init = p_dust_init
             
-            # Run Fitting
+            # Run fitting on dust map
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore', AstropyUserWarning)
                 fit_p_dust = fitting.LevMarLSQFitter()
@@ -178,46 +251,42 @@ class Worker:
 
         # Define a custom model
         class Dust_Model(Fittable2DModel):
-            amp = Parameter(default=0, fixed=exclude_dust)
+            amp = Parameter(default=10)
 
             @staticmethod
             def evaluate(x, y, amp):
                 return amp * dust_model[isfinite]
-        
+
         if init_models is not None:
             m_init = init_models['compound_init']
         else:
             # Initialize poly sky + dust compound model for fitting
-            m_init = models.Polynomial2D(degree=poly_deg, c0_0=sky_val) + Dust_Model()
+            Sky_Model = models.Polynomial2D(degree=poly_deg, c0_0=self.sky_val)
+            m_init = Sky_Model + Dust_Model()
             m_init.amp_1.min = 0
+            if dust_ratio is not None:
+                m_init.amp_1 = dust_ratio
+                m_init.amp_1.fixed = True
             #m_init.c0_0_0.min = 0
 
         self.compound_init = m_init
-        
-        # Run fitting
+
+        # Run fitting on data
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', AstropyUserWarning)
             fit_m = fitting.LevMarLSQFitter()
             m_comp = fit_m(m_init, xx_ds[isfinite], yy_ds[isfinite], bkg_ds[isfinite])
-        
-#        end = time.time()
-#        print(end-start)
-        
+
         # m_comp is the mapping function
         self.model_compound = m_comp
-        
-        # Evaluate dust and sky models at the meshgrid
-        dust_model = dust_model * m_comp.amp_1
+
+        # Evaluate sky models at the meshgrid
         sky_poly = m_comp.left(xx_ds, yy_ds)
         sky_model = resize(sky_poly, output_shape=self.shape, order=3)
 
         self.sky_model = sky_model
-        
-        self.run_fitting = True
-        
-        # Fetch fitted coefficients
-        self.get_coeff_matrix()
-    
+
+        self.fitting_runned = True
     
     def get_coeff_matrix(self):
 
@@ -225,7 +294,7 @@ class Worker:
         Reshape fitted polynomial coefficients into maxtrix form.
         """
         
-        if self.run_fitting is False:
+        if self.fitting_runned is False:
             raise Exception('Sky model fitting has not been runned!')
         
         deg = self.poly_deg
