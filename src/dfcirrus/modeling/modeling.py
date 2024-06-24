@@ -15,12 +15,7 @@ from astropy.table import Table
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.modeling import models
 
-from cap_mpfit import mpfit
-
-import dynesty
-from dynesty import plotting as dyplot
-
-from elderflower.plotting import AsinhNorm, LogNorm, colorbar
+# from cap_mpfit import mpfit
 
 def linear(x, A, B):
     return A * x + B

@@ -17,13 +17,18 @@ from astropy.stats import mad_std, SigmaClip, sigma_clip
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel
 
 from photutils.background import MADStdBackgroundRMS
-from elderflower.utils import downsample_wcs
-from elderflower.utils import make_psf_2D
 
+from ..io import logger
 from .worker import Worker
 from .utils import mode, match_gaussian_beam
 from .image import ImageButler, PlanckImage, IRISImage
 
+try:
+    from elderflower.utils import downsample_wcs
+    from elderflower.utils import make_psf_2D
+except:
+    logger.error('elderflower not installed. Missing some utilities.')
+    
 
 p0_RonP = [15., -8, 0.7, 0.001, 3, 0.99]
 p0_GonP = [8., -5, 0.5, 0.001, 3, 0.99]

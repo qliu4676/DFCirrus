@@ -12,8 +12,13 @@ from astropy.stats import bootstrap
 from astropy.utils import NumpyRNGContext
 from reproject import reproject_interp
 
-from elderflower.utils import downsample_wcs
+from ..io import logger
 
+try:
+    from elderflower.utils import downsample_wcs
+except:
+    logger.error('elderflower not installed. Missing some utilities.')
+    
 from .utils import assign_value_by_filters, fill_nan
 
 

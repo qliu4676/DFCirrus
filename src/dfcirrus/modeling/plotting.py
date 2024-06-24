@@ -2,8 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.stats import sigma_clip
 
-from elderflower.plotting import AsinhNorm, LogNorm, colorbar
+from ..io import logger
 
+try:
+    from elderflower.plotting import AsinhNorm, LogNorm, colorbar
+except:
+    logger.error('elderflower not installed. Missing some utilities.')
 
 def display(image, mask=None,
             k_std=10, cmap="gray_r",
