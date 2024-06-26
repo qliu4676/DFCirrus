@@ -132,11 +132,17 @@ class ImageButler:
             cutout = Cutout2D(data, self.coord_cutout, self.shape_cutout, wcs=self.wcs)
             return cutout.data
     
-    def make_RGB(self, image_G, image_R, mask=None, plot_kws={}, **kws):
+    def make_RGB(self, image_G, image_R,
+                 mask=None, plot_kws={},
+                 method='interpolate',**kws):
         from astropy.visualization import make_lupton_rgb
         img_R = np.ma.array(image_R, mask=mask).filled(np.nan)
         img_G = np.ma.array(image_G, mask=mask).filled(np.nan)
-        img_rgb = make_lupton_rgb(img_R, (img_R+img_G)/2., img_G, **kws)
+        if method=='interpolate':
+            img_rgb = make_lupton_rgb(img_R, (img_R+img_G)/2., img_G, **kws)
+        elif method=='extrapolate':
+#            img_rgb = make_lupton_rgb(img_R, img_G, (1.5*img_G - img_R), **kws)
+            img_rgb = make_lupton_rgb(img_R, img_G, (2*img_G - 0.5*img_R), **kws)
         self.img_rgb = img_rgb
         
         display(img_rgb, **plot_kws)

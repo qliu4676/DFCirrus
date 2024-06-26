@@ -261,6 +261,7 @@ def remove_compact_emission(image, mask=None,
                             background_percentile=50,
                             fill_mask=True,
                             use_peak=True,
+                            use_output='residual',
                             n_threshold=None,
                             kernel_replace_masked=5,
                             background_size=128,
@@ -299,9 +300,9 @@ def remove_compact_emission(image, mask=None,
 
         # smooth the input image
         image_smooth = convolve_fft(image, Gaussian2DKernel(kernel_stddev[1]), boundary='fill', fill_value=bkg, mask=mask)
-        residual_conv = image_smooth-image_conv_bkg
+        image_out = image_smooth - image_conv_bkg
         
-        rht.residual_conv = residual_conv
+        rht.image_out = image_out
         rht.image_smooth=image_smooth
         rht.image_conv_bkg=image_conv_bkg
     
@@ -309,13 +310,16 @@ def remove_compact_emission(image, mask=None,
         print('Removing compact emission using RHT R = {:}:'.format(rht_radius))
         rht.work(n_theta, background_percentile, kernel_replace_masked, use_peak=use_peak)
         
-        residual_conv = rht.residual_conv
+        if use_output=='residual':
+            image_out = rht.image_residual
+        elif use_output=='ratio':
+            image_out = rht.image_ratio
         
     # detect compact emission
     if n_threshold is None:
         print('    - Detecting blobs using quantiles...')
-        q_proc = np.nanquantile(abs(residual_conv), quantile)
-        isolated = residual_conv>=q_proc
+        q_proc = np.nanquantile(abs(image_out), quantile)
+        isolated = image_out>=q_proc
     else:
         print('    - Detecting blobs using source detection S/N={:.1f}...'.format(n_threshold))
         if source_extractor == 'sep':
@@ -325,8 +329,8 @@ def remove_compact_emission(image, mask=None,
                 segm[segmap==label] = 0
             isolated = segm>0
         elif source_extractor == 'photutils':
-            data_ma, segm_sm = photutils_source_detection(residual_conv, mask=None, n_threshold=n_threshold, b_size=background_size)
-            segm_deb = deblend_sources(residual_conv, segm_sm, npixels=10,
+            data_ma, segm_sm = photutils_source_detection(image_out, mask=None, n_threshold=n_threshold, b_size=background_size)
+            segm_deb = deblend_sources(image_out, segm_sm, npixels=10,
                                        nlevels=64, contrast=0.001)
 
             cat_segm = SourceCatalog(image, segm_deb)
@@ -359,8 +363,8 @@ def remove_compact_emission(image, mask=None,
         
         fig, (ax1,ax2) = plt.subplots(1, 2, figsize=figsize)
         im=ax1.imshow(image_smooth, vmin=-2, vmax=3, cmap='viridis')
-        im=ax2.imshow(residual_conv, vmin=0, vmax=2, cmap='viridis')
-        plt.savefig('tmp/residual_conv.png',dpi=75)
+        im=ax2.imshow(image_out, vmin=0, vmax=2, cmap='viridis')
+        plt.savefig('tmp/image_out.png',dpi=75)
         plt.show()
     
     return image_proc, rht
@@ -381,7 +385,11 @@ class RHT_worker:
         
         self.bkg = np.nanmedian(image[~mask])
 
-    def work(self, n_theta=None, background_percentile=50, kernel_replace_masked=5, use_peak=True, normed_by_background=False):
+    def work(self, n_theta=None,
+             background_percentile=50,
+             kernel_replace_masked=5, use_peak=True,
+             normed_by_background=False, bkg=10):
+        """ Run the RHT and compute the max response. """
         from fil_finder.rollinghough import circular_region
         from photutils.aperture import RectangularAperture
         
@@ -437,22 +445,21 @@ class RHT_worker:
             
         image_response = ndimage.median_filter(image_response, size=size_mf, mode='reflect', cval=bkg)
         
-        if use_peak:
-            residual_conv = image_smooth - image_response    
-            
-            if normed_by_background:
-                image_conv_bkg = np.quantile(imgs_conv, background_percentile/100, axis=0)
-                ratio_map = image_conv_bkg/image_response
-                residual_conv = residual_conv * ratio_map
-            
-        else:
-            residual_conv = image_smooth-image_response
-            
+        residual_conv = image_smooth - image_response
+        ratio_conv = (image_smooth+bkg) / (image_response+bkg) - 1 # add bkg to avoid 0/0
+
+        if use_peak & normed_by_background:
+            image_conv_bkg = np.quantile(imgs_conv, background_percentile/100, axis=0)
+            ratio_map = (image_conv_bkg+bkg) / (image_response+bkg) - 1
+            residual_conv = residual_conv * ratio_map
+                        
         # residual_conv[residual_conv<0] = 0
         residual_conv = ndimage.median_filter(residual_conv, size=size_mf, mode='reflect', cval=0)
+        ratio_conv = ndimage.median_filter(ratio_conv, size=size_mf, mode='reflect', cval=0)
         
         self.image_response = image_response
-        self.residual_conv = residual_conv
+        self.image_residual = residual_conv
+        self.image_ratio = ratio_conv
         
         
 def fill_nan(image, image_fill, max_distance=1):

@@ -59,10 +59,10 @@ class Fitter:
         
         """ Setup fitting """
         
-        from .modeling import (eval_likelihood_poly, 
-                               eval_likelihood_poly_mix_constr,
-                               eval_likelihood_piecewise_lin_mix_constr,
-                               eval_likelihood_multi_lin_mix_constr)
+        from .models import (eval_likelihood_poly,
+                             eval_likelihood_poly_mix_constr,
+                             eval_likelihood_piecewise_lin_mix_constr,
+                             eval_likelihood_multi_lin_mix_constr)
         
         xdata, ydata = self.xdata, self.ydata
         
@@ -118,7 +118,7 @@ class Fitter:
         self.poly_deg = poly_deg
     
         if fit_bkg2d:
-            from .modeling import make_legendre2d_grids
+            from .models import make_legendre2d_grids
             # make legendre grids
             self.legendre_grids = make_legendre2d_grids(self.image_shape)
             legendre_terms = [grid[self.fit_range].ravel()[cond] for grid in self.legendre_grids]

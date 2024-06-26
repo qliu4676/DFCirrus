@@ -48,6 +48,7 @@ def run_cirrus_modeling(fn_g, fn_r,
                         std_g=None,
                         std_r=None,
                         mask_std=2.5,
+                        planck_model='radiance',
                         fit_Planck=True,
                         fill_mask=True,
                         plot=True,
@@ -112,10 +113,18 @@ def run_cirrus_modeling(fn_g, fn_r,
     
     wcs_rp = downsample_wcs(wcs, scale=scale)
     shape_output = int(worker._image_shape[0] * scale), int(worker._image_shape[1] * scale)
-    dust_map = pla.reproject(wcs_rp, shape_output, model='tau')
-
-    val_Planck_ = dust_map[worker.fit_range].ravel() * 1e5
+    
+    dust_map = pla.reproject(wcs_rp, shape_output, model=planck_model)
+    
+    if planck_model == 'tau':
+        planck_scale_factor = 1e5
+    elif planck_model == 'radiance':
+        planck_scale_factor = 1e7
+    print(f'Using planck {planck_model} dust models.')
+    
+    val_Planck_ = dust_map[worker.fit_range].ravel() * planck_scale_factor
     val_Planck = val_Planck_.copy()
+    worker.x_P = val_Planck
     
     if plot:
         fig, (ax1,ax2,ax3) = plt.subplots(1,3,figsize=(26,6), dpi=120)
@@ -123,7 +132,7 @@ def run_cirrus_modeling(fn_g, fn_r,
         plt.colorbar(im, ax=ax1)
         im = ax2.imshow(worker.data_R, vmin=-3*std_r, vmax=+8*std_r, cmap=plt.cm.inferno)
         plt.colorbar(im, ax=ax2)
-        im = ax3.imshow(dust_map, vmin=0.2e-5, vmax=2e-5, cmap=plt.cm.inferno)
+        im = ax3.imshow(dust_map, cmap=plt.cm.inferno)
         plt.colorbar(im, ax=ax3)
         plt.tight_layout()
         plt.show()

@@ -271,7 +271,7 @@ class Worker:
     def set_cond(self, sigma_lower=-5, sigma_upper=20, pad=0):
         """ Set ranges and priors for fitting """
         
-        # from .modeling import prior_all_tf, make_legendre2d_grids
+        # from .models import prior_all_tf, make_legendre2d_grids
         
         bkg_val_G = self.bkg_val_G
         bkg_val_R = self.bkg_val_R
@@ -450,6 +450,7 @@ class Worker:
                    n_threshold=None,
                    background_percentile=50,
                    use_peak=False,
+                   use_output='ratio',
                    kernel_type='linear',
                    rht_radius=36,
                    name='', 
@@ -527,7 +528,8 @@ class Worker:
                                       rht_radius=rht_radius, 
                                       n_threshold=n_threshold,
                                       use_peak=use_peak,
-                                      background_percentile=background_percentile, 
+                                      use_output=use_output,
+                                      background_percentile=background_percentile,
                                       fill_mask=fill_mask,
                                       figsize=figsize)
             
