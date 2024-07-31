@@ -161,7 +161,7 @@ class Worker:
         """ Rebin the image. Surface brightness is retained. """
         
         from astropy.nddata import block_reduce
-        from .utils import resample
+        from .utils import resample_image
         
         self.scale_factor = scale
         print('Rescale the image by a factor of {:}'.format(scale))
@@ -448,9 +448,10 @@ class Worker:
                    remove_compact=True, 
                    remove_compact_qantile=0.995,
                    n_threshold=None,
+                   kernel_replace_masked=9,
                    background_percentile=50,
                    use_peak=False,
-                   use_output='ratio',
+                   use_output='residual',
                    kernel_type='linear',
                    rht_radius=36,
                    name='', 
@@ -527,6 +528,7 @@ class Worker:
                                       quantile=remove_compact_qantile, 
                                       rht_radius=rht_radius, 
                                       n_threshold=n_threshold,
+                                      kernel_replace_masked=kernel_replace_masked,
                                       use_peak=use_peak,
                                       use_output=use_output,
                                       background_percentile=background_percentile,

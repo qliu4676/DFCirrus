@@ -10,6 +10,10 @@ from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_repl
 from photutils.background import Background2D, SExtractorBackground
 from photutils.segmentation import detect_sources, deblend_sources, SourceCatalog
 
+from maskfill import maskfill
+
+from ..io import logger
+
 def mode(x):
     return 2.5*np.nanmedian(x) - 1.5*np.nanmean(x)
 
@@ -179,8 +183,8 @@ def assign_value_by_filters(values, filters=['G', 'R']):
         result = {filt:val for (filt, val) in zip(filters, values)}
     return result
 
-def resample(image, mask=None, shape_new=None, 
-             method='cubic', fill_value=0):
+def resample_image(image, mask=None, shape_new=None,
+                   method='cubic', fill_value=0):
     
     """ Resample image and mask """
     
@@ -201,10 +205,13 @@ def resample(image, mask=None, shape_new=None,
     # interpolation with griddata
     ma = np.isnan(image)
     image_new = interpolate.griddata((yy[~ma], xx[~ma]), image[~ma], (yyp, xxp), method=method, fill_value=fill_value)
-    mask_new = interpolate.griddata((yy.ravel(), xx.ravel()), mask.ravel(), (yyp, xxp), method='nearest')
+    if mask is not None:
+        mask_new = interpolate.griddata((yy.ravel(), xx.ravel()), mask.ravel(), (yyp, xxp), method='nearest')
+    else:
+        mask_new = None
     
     # set nan back
-    ma_new = interpolate.griddata((yy.ravel(), xx.ravel()), ma.ravel(), (yyp, xxp), method='nearest')
+    ma_new = interpolate.griddata((yy.ravel(), xx.ravel()), ma.ravel(), (yyp, xxp), method='nearest') > 0.5
     image_new[ma_new] = np.nan
     
     return image_new, mask_new
@@ -251,6 +258,40 @@ def match_gaussian_beam(PSF, pixel_scale, fwhm_target=5*u.arcmin, plot=False):
         plt.show()
     
     return kernel
+    
+def create_matching_kernel(source_psf, target_psf, window=None):
+    """
+    Create kernel transform resolution from given source PSF to target PSF.
+
+    Parameters
+    ----------
+    source_psf : np.ndarray
+        Point-spread function of source image.
+    target_psf : np.ndarray
+        Point-spread function of target image.
+    window : callable, optional
+        Window function, by default None.
+
+    Returns
+    -------
+    kernel : np.ndarray
+        Matching kernel.
+    """
+    if source_psf.shape != target_psf.shape:
+        raise ValueError('source_psf and target_psf must have the same shape '
+                         '(i.e. registered with the same pixel scale).')
+
+    source_otf = np.fft.fftshift(np.fft.fft2(source_psf))
+    target_otf = np.fft.fftshift(np.fft.fft2(target_psf))
+    ratio = target_otf / source_otf
+
+    # Apply a window function in frequency space.
+    if window is not None:
+        ratio *= window(target_psf.shape)
+
+    kernel = np.real(np.fft.fftshift((np.fft.ifft2(np.fft.ifftshift(ratio)))))
+
+    return kernel
 
 def remove_compact_emission(image, mask=None, 
                             kernel_stddev=(20,3), 
@@ -263,7 +304,7 @@ def remove_compact_emission(image, mask=None,
                             use_peak=True,
                             use_output='residual',
                             n_threshold=None,
-                            kernel_replace_masked=5,
+                            kernel_replace_masked=9,
                             background_size=128,
                             source_extractor='photutils',
                             plot=False, figsize=(18, 6)):
@@ -284,7 +325,7 @@ def remove_compact_emission(image, mask=None,
     rht = RHT_worker(image, mask, radius=rht_radius)
     
     if kernel_type == 'Gaussian':
-        print(f'Removing compact emission using Gaussian kernel [{kernel_stddev[0]}x{kernel_stddev[1]}]:')
+        logger.info(f'Removing compact emission using Gaussian kernel [{kernel_stddev[0]}x{kernel_stddev[1]}]:')
         if n_theta is None:
             n_theta = np.round(np.arctan2(max(kernel_stddev), min(kernel_stddev)) * 180/np.pi).astype(int) // 5
             
@@ -307,7 +348,7 @@ def remove_compact_emission(image, mask=None,
         rht.image_conv_bkg=image_conv_bkg
     
     elif kernel_type == 'linear':
-        print('Removing compact emission using RHT R = {:}:'.format(rht_radius))
+        logger.info('Removing compact emission using RHT R = {:}:'.format(rht_radius))
         rht.work(n_theta, background_percentile, kernel_replace_masked, use_peak=use_peak)
         
         if use_output=='residual':
@@ -317,11 +358,11 @@ def remove_compact_emission(image, mask=None,
         
     # detect compact emission
     if n_threshold is None:
-        print('    - Detecting blobs using quantiles...')
+        logger.info('    - Detecting blobs using quantiles...')
         q_proc = np.nanquantile(abs(image_out), quantile)
         isolated = image_out>=q_proc
     else:
-        print('    - Detecting blobs using source detection S/N={:.1f}...'.format(n_threshold))
+        logger.info('    - Detecting blobs using source detection S/N={:.1f}...'.format(n_threshold))
         if source_extractor == 'sep':
             cat, segmap = sep_extract_sources(data, thresh=n_threshold, min_area=10, bw=background_size, subtract_sky=False)
             segm = segmap.copy()
@@ -337,7 +378,8 @@ def remove_compact_emission(image, mask=None,
             segm_deb.keep_labels(segm_deb.labels[cat_segm.elongation<2])
             isolated = segm_deb.data>0
         else:
-            raise NameError('Tools of Source Extraction not found!')
+            logger.error('Tools of Source Extraction not found!')
+            raise NameError
         
     isolated = ndimage.binary_dilation(isolated, iterations=5)
     rht.isolated = isolated
@@ -346,9 +388,11 @@ def remove_compact_emission(image, mask=None,
     image_[isolated|mask] = np.nan
     
     if fill_mask:
+        image_proc, image_proc_unsmoothed = maskfill(image_, np.isnan(image_), size=kernel_replace_masked)
+        
         # image_proc = fill_nan_iterative(image_, k0=1)
-        image_proc = interpolate_replace_nans(image_, Gaussian2DKernel(kernel_replace_masked), 
-                                              convolve=convolve_fft)
+#        image_proc = interpolate_replace_nans(image_, Gaussian2DKernel(kernel_replace_masked), 
+#                                              convolve=convolve_fft)
     else:
         image_proc = image_
 
@@ -387,8 +431,8 @@ class RHT_worker:
 
     def work(self, n_theta=None,
              background_percentile=50,
-             kernel_replace_masked=5, use_peak=True,
-             normed_by_background=False, bkg=10):
+             kernel_replace_masked=9, use_peak=True,
+             normed_by_background=False, bkg=1e5):
         """ Run the RHT and compute the max response. """
         from fil_finder.rollinghough import circular_region
         from photutils.aperture import RectangularAperture
@@ -426,9 +470,9 @@ class RHT_worker:
         
         size_mf = np.max([np.min([radius//4, 4]), 1])
         
-        print('    - Smoothing the image by median filtering and caculating the residual...')
+        logger.info('    - Smoothing the image by median filtering and caculating the residual...')
         if np.isnan(image).any():
-            print('    - Filling nan values for smoothing...')
+            logger.info('    - Filling nan values for smoothing...')
             # image = fill_nan_iterative(image, k0=1)
             image = interpolate_replace_nans(image, Gaussian2DKernel(kernel_replace_masked), convolve=convolve_fft)
             
@@ -437,7 +481,7 @@ class RHT_worker:
     
         self.image_smooth = image_smooth
 
-        print('    - Computing the local RHT responses...')
+        logger.info('    - Computing the local RHT responses...')
         if use_peak:
             image_response = np.nanmax(imgs_conv, axis=0)
         else:
@@ -447,19 +491,21 @@ class RHT_worker:
         
         residual_conv = image_smooth - image_response
         ratio_conv = (image_smooth+bkg) / (image_response+bkg) - 1 # add bkg to avoid 0/0
+#        image_conv_bkg = np.quantile(imgs_conv, background_percentile/100, axis=0)
+#        ratio_conv = image * (1-(image_response-image_conv_bkg)/image_response) # add bkg to avoid 0/0
 
         if use_peak & normed_by_background:
-            image_conv_bkg = np.quantile(imgs_conv, background_percentile/100, axis=0)
             ratio_map = (image_conv_bkg+bkg) / (image_response+bkg) - 1
             residual_conv = residual_conv * ratio_map
                         
         # residual_conv[residual_conv<0] = 0
         residual_conv = ndimage.median_filter(residual_conv, size=size_mf, mode='reflect', cval=0)
-        ratio_conv = ndimage.median_filter(ratio_conv, size=size_mf, mode='reflect', cval=0)
+        #ratio_conv = ndimage.median_filter(ratio_conv, size=size_mf, mode='reflect', cval=0)
         
         self.image_response = image_response
         self.image_residual = residual_conv
         self.image_ratio = ratio_conv
+        #self.image_conv_bkg = image_conv_bkg
         
         
 def fill_nan(image, image_fill, max_distance=1):
@@ -493,7 +539,8 @@ def fill_nan_iterative(image, k0=0, kmax=None):
     is_nan_map = np.isnan(image)
     
     while is_nan_map.any():
-        print("    - Filling nan values using Gaussian kernel interpolation... Iteration {:d}: {:d} pixels left".format(i+1, is_nan_map.sum()))
+        msg = "    - Filling nan values using Gaussian kernel interpolation... Iteration {:d}: {:d} pixels left"
+        logger.info(msg.format(i+1, is_nan_map.sum()))
         
         i += 1
         k += 1
