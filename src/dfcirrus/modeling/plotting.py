@@ -2,12 +2,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.stats import sigma_clip
 
+from skimage.color import rgb2gray
+from skimage import img_as_float
+
 from ..io import logger
+
+try:
+    from PIL import Image
+    PIL_installed = True
+except ModuleNotFoundError:
+    PIL_installed = False
 
 try:
     from elderflower.plotting import AsinhNorm, LogNorm, colorbar
 except:
-    logger.error('elderflower not installed. Missing some utilities.')
+    logger.error('elderflower is not installed. Missing some utilities.')
+    
+# Temperature table for RGB display
+kelvin_table = {
+    1000: (255,56,0),
+    1500: (255,109,0),
+    2000: (255,137,18),
+    2500: (255,161,72),
+    3000: (255,180,107),
+    3500: (255,196,137),
+    4000: (255,209,163),
+    4500: (255,219,186),
+    5000: (255,228,206),
+    5500: (255,236,224),
+    6000: (255,243,239),
+    6500: (255,249,253),
+    7000: (245,243,255),
+    7500: (235,238,255),
+    8000: (227,233,255),
+    8500: (220,229,255),
+    9000: (214,225,255),
+    9500: (208,222,255),
+    10000: (204,219,255)}
+    
 
 def display(image, mask=None,
             k_std=10, cmap="gray_r",
@@ -68,3 +100,102 @@ def draw_reference_residual(Image):
     
     plt.tight_layout()
     plt.show()
+
+
+def convert_temp(image, temp=7500):
+    """ Implement a temperatue correction for displaying RGB image.
+    
+    Parameters
+    ----------
+    image: numpy array of WxHx3 of uint8 [0,255]
+        Input color image.
+    temp: int
+        Display temperatue.
+    
+    Returns
+    -------
+    image_rgb: numpy array of WxHx3 of float [0,1]
+        Output image with adjusted temperatue.
+        
+    """
+    
+    r, g, b = kelvin_table[temp]
+    matrix = ( r / 255.0, 0.0, 0.0, 0.0,
+               0.0, g / 255.0, 0.0, 0.0,
+               0.0, 0.0, b / 255.0, 0.0 )
+    if PIL_installed:
+        im = Image.fromarray(image)
+        im_convert = image.convert('RGB', matrix)
+        image_rgb = np.array(im_convet)
+    else:
+        logger.error('PIL is not installed. No temperature correction applied.')
+        image_rgb = None
+        
+    return image_rgb
+    
+
+def correct_colors(image, w=[1,1,1],verbose=False):
+    '''
+    ---------------------------------------------------------------------------
+                    Correct image colors (remove color casts)
+    ---------------------------------------------------------------------------
+    
+    Implements a simple color correction using the Gray World Color Assumption
+    and White Point Correction. Snippets from Vonikakis
+    
+    Snippets from  Vonikakis, V., Arapakis, I. & Andreadis, I. (2011).
+    
+    Parameters
+    ----------
+    image: numpy array of WxHx3 of uint8 [0,255]
+        Input color image.
+    verbose: boolean
+        Display outputs.
+    
+    Returns
+    -------
+    image_out: numpy array of WxHx3 of float [0,1]
+        Output image with adjusted colors.
+        
+    '''
+    
+    image_out = img_as_float(image.copy())  # [0,1]
+    
+    # mean of all channels
+    image_mean = (image_out[:,:,0].mean() +
+                  image_out[:,:,1].mean() +
+                  image_out[:,:,2].mean()) / 3
+                  
+    # logarithm base to which each channel will be raised
+    base_r = w[0]*image_out[:,:,0].mean() / image_out[:,:,0].max()
+    base_g = w[1]*image_out[:,:,1].mean() / image_out[:,:,1].max()
+    base_b = w[2]*image_out[:,:,2].mean() / image_out[:,:,2].max()
+    
+    # the power to which each channel will be raised
+    power_r = np.log(image_mean, base_r)
+    power_g = np.log(image_mean, base_g)
+    power_b = np.log(image_mean, base_b)
+    
+    # separately applying different color correction powers to each channel
+    image_out[:,:,0] = (image_out[:,:,0] / image_out[:,:,0].max()) ** power_r
+    image_out[:,:,1] = (image_out[:,:,1] / image_out[:,:,1].max()) ** power_g
+    image_out[:,:,2] = (image_out[:,:,2] / image_out[:,:,2].max()) ** power_b
+    
+    if verbose is True:
+        
+        plt.figure(figsize=(18,7),dpi=100)
+        plt.subplot(1,2,1)
+        plt.imshow(image)
+        plt.title('Input image')
+        plt.axis('off')
+        
+        plt.subplot(1,2,2)
+        plt.imshow(image_out, vmin=0, vmax=1)
+        plt.title('Corrected colors')
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.suptitle('Gray world color correction')
+        plt.show()
+    
+    return image_out
