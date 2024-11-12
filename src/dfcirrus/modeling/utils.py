@@ -743,3 +743,147 @@ def gini(data):
     kernel = (2. * np.arange(1, npix + 1) - npix - 1) * np.abs(flattened)
 
     return np.sum(kernel) / normalization
+    
+# Helper function for n-d data
+
+def calculate_roots_coefs(coefs, x0=0):
+    """ Calculate the roots of the inverse of a polynomial curve numericly.
+    If several roots exist, returns the one closest to x0. """
+    roots = np.roots(coefs)
+    return roots[np.argmin(abs(roots-x0))]
+    
+def calculate_roots(coefs, range=None):
+    """
+    Calculate the roots of the inverse of a polynomial curve numericly.
+    If several roots exist, returns the smallest root within the range (if given).
+    """
+    roots = np.roots(coefs)
+    return get_min_root(roots, range)
+
+def get_min_root(values, range=None):
+    if range is not None:
+        cond = (values>=range[0]) & (values<=range[1])
+        if len(values[cond]) > 0:
+            return min(values[cond])
+        else:
+            return range[0]
+    else:
+        return np.min(values)
+        
+def solve_equation_poly(coefs, values, initial_guess=0, range=None):
+    """  Return solution of y given polynomial coefficients (in numpy order). """
+    
+    from numpy.polynomial import Polynomial
+    from scipy.optimize import fsolve
+
+    # Define the system of equations
+    def equations(x, y=0):
+        return Polynomial(coefs)(x) - y
+
+    # Solve the system of equations
+    solution = np.array([get_min_root(fsolve(equations, initial_guess, args=(val)), range=range)
+                        for val in values])
+    
+    return solution
+
+#def solve_equation_sym(coefs):
+#    import sympy as sp
+#
+#    # Define the variables
+#    x = sp.symbols('x')
+#    y = sp.symbols('y')
+#
+#    # Define the polynomials
+#    p1 = 0.001*x**2 + 0.01131133*x + 0.00540889
+#    p2 = 0.001*y**2 + 0.00778693*y + 0.00706165
+#
+#    # Set up the equation p1 = p2
+#    equation = sp.Eq(p1, p2)
+#
+#    # Solve the equation
+#    solutions = sp.solve(equation, y)
+
+def calculate_arc_length_points(xpoints, ypoints, spline=None, verbose=False):
+    """ Numerically Integrate the Arc Length of a curve given discrete grid points.
+        Use cubic spline interpolation to provide a continuous curve. """
+        
+    from scipy.interpolate import UnivariateSpline
+    from scipy.integrate import quad
+    
+    if spline is not None:
+        # Define the derivative of the spline function
+        def spline_derivative(x):
+            return spline.derivative()(x)
+
+        # Define the integrand function for arc length
+        def integrand(x):
+            return np.sqrt(1 + spline_derivative(x)**2)
+
+        # Set the limits of integration
+        a, b = xpoints[0], xpoints[-1]
+
+        # Perform the numerical integration
+        arc_length, error = quad(integrand, a, b)
+    else:
+        if len(xpoints) > 5:
+            # Perform spline interpolation
+            spline = UnivariateSpline(xpoints, ypoints, k=3, s=0)  # Cubic spline
+
+        elif len(xpoints) > 1:
+            distances = np.sqrt(np.diff(xpoints)**2 + np.diff(ypoints)**2)
+
+            # Sum up the distances to get the total arc length
+            arc_length, error = np.sum(distances), None
+            
+        else:
+            arc_length, error = 0, None
+
+    if verbose:
+        print(f"Arc length: {arc_length}")
+        print(f"Integration error estimate: {error}")
+
+    return arc_length
+
+def distance_spline(t, x0, y0, spline):
+    # Define the distance function between a point and the spline
+    x_spline = spline(t)
+    return np.sqrt((t - x0)**2 + (x_spline - y0)**2)
+
+def calculate_distance_spline(xpoints, ypoints, spline, init_guess, bounds):
+    """ Project the coordinates of a point onto a given spline curve. """
+    from scipy.optimize import minimize
+    # Use optimization to find the parameter t that minimizes the distance
+    
+    tpoints = np.empty_like(xpoints)
+    spoints = np.empty_like(xpoints)
+    for i, (xp, yp, x0) in enumerate(zip(xpoints, ypoints, init_guess)):
+        if np.isnan(xp) | np.isnan(yp):
+            tpoints[i] = spoints[i] = np.nan
+        else:
+            result = minimize(lambda t: distance_spline(t, xp, yp, spline), x0=x0, bounds=bounds)
+
+            # Find the closest point on the spline
+            t_optimal = result.x[0]
+            s_optimal = spline(t_optimal)
+            
+            tpoints[i] = t_optimal
+            spoints[i] = s_optimal
+    
+    return tpoints, spoints
+
+
+def project_distance_spline(xpoints, ypoints, spline, x0, t_p0=None):
+    """ Return the projected arc length along a curve for given points. """
+    bounds = [(np.nanmin(xpoints), np.nanmax(xpoints))]
+    
+    # projected cooridnates
+    t_p, s_p = calculate_distance_spline(xpoints, ypoints, spline, init_guess=xpoints, bounds=bounds)
+    
+    if t_p0 is None:
+        # start point
+        t_p0, s_p0 = calculate_distance_spline([x0[0]], [x0[1]], spline, init_guess=[x0[0]], bounds=bounds)
+    
+    # projected arc length
+    x_p = np.array([calculate_arc_length_points(t_p0 + [t_p[k]], [0, s_p[k]], spline) for k in range(len(t_p))])
+    
+    return x_p

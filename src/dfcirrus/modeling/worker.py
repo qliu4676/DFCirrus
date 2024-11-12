@@ -360,13 +360,15 @@ class Worker:
             xmin=None, ymin=None,
             xconstr=None, 
             method='Nelder-Mead',
+            weights_filter=None,
             **kwargs):
         
         from .fit import Fitter
         start = time.time()
         
         # Set up fitter
-        fitter = Fitter(x, y, xconstr, xmin, ymin, clip, name)
+        fitter = Fitter(x, y, xconstr, xmin, ymin,
+                        clip=clip, weights_filter=weights_filter, name=name)
         fitter.fit_range = self.fit_range
         fitter.normed = self.normed
        

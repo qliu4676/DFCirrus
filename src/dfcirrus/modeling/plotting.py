@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 from astropy.stats import sigma_clip
 
 from skimage.color import rgb2gray
@@ -60,6 +61,12 @@ def display(image, mask=None,
                                 vmax=sky_mean+k_std*sky_std))
     ax.axis('off')
     return ax
+    
+def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
+    new_cmap = colors.LinearSegmentedColormap.from_list(
+        'trunc({n},{a:.2f},{b:.2f})'.format(n=cmap.name, a=minval, b=maxval),
+        cmap(np.linspace(minval, maxval, n)))
+    return new_cmap
     
 def draw_reference_residual(Image):
     """ Plotting function for visualizing output """
@@ -172,9 +179,9 @@ def correct_colors(image, w=[1,1,1],verbose=False):
     base_b = w[2]*image_out[:,:,2].mean() / image_out[:,:,2].max()
     
     # the power to which each channel will be raised
-    power_r = np.log(image_mean, base_r)
-    power_g = np.log(image_mean, base_g)
-    power_b = np.log(image_mean, base_b)
+    power_r = np.math.log(image_mean, base_r)
+    power_g = np.math.log(image_mean, base_g)
+    power_b = np.math.log(image_mean, base_b)
     
     # separately applying different color correction powers to each channel
     image_out[:,:,0] = (image_out[:,:,0] / image_out[:,:,0].max()) ** power_r

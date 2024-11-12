@@ -110,39 +110,55 @@ def eval_likelihood_poly(params, xdata, ydata, poly_deg,
     
 def eval_likelihood_poly_mix_constr(params, xdata, ydata, poly_deg,
                                     xconstr=None, penalty=1e-2, 
-                                    sigmoid=True, a=0.2, 
-                                    legendre_terms=None, give_prob=False):
+                                    sigmoid=False, a=0.2,
+                                    weights_filter=[1,1],
+                                    legendre_terms=None,
+                                    give_prob=False):
     
     """ Likelihood function for mixture populations of polynoimal models with linear constraint """
     
+    # number of variable dimensions
+    ndim = np.ndim(xdata)
+    if ndim > 1:
+        xdata = xdata.T
+        
     # read parameters
     coefs = params[:poly_deg+1]
     eps = params[poly_deg+1]
     
-    if sigmoid:
-        # index of the outlier population
-        j = poly_deg+3
-    else:
-        j = poly_deg+2
+    if ndim > 1:
+        coefs = np.delete(params[:(poly_deg+1) * ndim + 1], poly_deg+1)
+        coefs = np.array(coefs).reshape(ndim, poly_deg+1)
+    
+    # j is index of the outlier population
+    j = (poly_deg+1) * ndim + 1
+    if sigmoid: j += 1
     
     mu, sigma, frac = params[j:j+3]
     
-    if frac<=0.5 or frac>=1 or eps<=0 or sigma<=eps:
+    if (frac<=0.5) or (frac>1) or (eps<=0) or (sigma<=eps):
         return np.inf
     
     # 1d polynomials
-    poly = Polynomial(coefs[::-1])
+    if ndim == 1:
+        poly = Polynomial(coefs[::-1])
+    else:
+        polys = [Polynomial(coef_n[::-1]) for coef_n in coefs]
     
     if sigmoid:
         # smoothing with sigmoid function
-        x_min = params[poly_deg+2]
+        x_min = params[j-1]
         h = lambda x: expit((x-x_min)/a)
     else:
         x_min = 0
         h = lambda x: 1
-        
-    ypred = poly(xdata) * h(xdata) + (1-h(xdata)) * poly(x_min-a)
     
+    if ndim == 1:
+        ypred = poly(xdata) * h(xdata) + (1-h(xdata)) * poly(x_min-a)
+    else:
+        ypred = np.array([polys[k](xdata[:,k]) * h(xdata[:,k]) + (1-h(xdata[:,k])) * polys[k](x_min-a) for k in range(ndim)])
+#        ypred = np.average(ypred, weights=weights_filter, axis=0)
+                
     if legendre_terms is not None:
         # background terms
         coefs_bkg = params[-5:]
@@ -150,7 +166,11 @@ def eval_likelihood_poly_mix_constr(params, xdata, ydata, poly_deg,
         ydata -= bkg2d
         
     # Note: prob may be lower than float limit, use np.logaddexp instead
-    logprob1 = -0.5 * ((ydata-ypred)/eps)**2 + np.log(frac/ eps)
+    if ndim == 1:
+        logprob1 = -0.5 * ((ydata-ypred)/eps)**2 + np.log(frac/ eps)
+    else:
+        logprob1 = [-0.5 * ((ydata-ypred[k])/eps)**2 + np.log(frac/ eps) for k in range(ndim)]
+        logprob1 = np.average(logprob1, weights=weights_filter, axis=0)
     logprob2 = -0.5 * ((ydata-mu)/sigma)**2 + np.log((1-frac)/sigma)
     
     logprob = np.logaddexp(logprob1, logprob2) # length = ydata
@@ -177,56 +197,74 @@ def eval_likelihood_poly_mix_constr(params, xdata, ydata, poly_deg,
     
 
 def eval_likelihood_piecewise_lin_mix_constr(params, xdata, ydata,
-                                             xconstr=None, penalty=1e-2, 
-                                             sigmoid=True, a=0.2,
-                                             legendre_terms=None, give_prob=False):
+                                             xconstr=None, penalty=1e-2,
+                                             sigmoid=False, a=0.2,
+                                             weights_filter=[1,1],
+                                             legendre_terms=None,
+                                             give_prob=False):
     
     """ Likelihood function for mixture populations of piecewise linear models with linear constraint """
     
+    # number of variable dimensions
+    ndim = np.ndim(xdata)
+    if ndim > 1:
+        xdata = xdata.T
+    
     # ending index of linear models
-    ind = 4
+    ind = 3 * ndim + 2
     
     # read parameters
-    A1, A2 = params[0], params[ind-1]
-    x0 = params[1]
-    y0 = params[2]
-    eps = params[ind]
+    A1, x0, y0, A2, eps = params[0:5]
     
-    if sigmoid:
-        # index of the outlier population
-        j = ind+2
-    else:
-        j = ind+1
+    # convert to array
+    if ndim > 1:
+        A1 = np.atleast_1d([A1] + params[5:ind:3])
+        x0 = np.atleast_1d([x0] + params[6:ind:3])
+        A2 = np.atleast_1d([A2] + params[7:ind:3])
+                
+    
+    # j is index of the outlier population
+    j = ind
+    if sigmoid: j += 1
 
     mu, sigma, frac = params[j:j+3]
     frac0 = 1 - np.sum(frac)
     
     if sigmoid:
         # smoothing with sigmoid function
-        x_min = params[ind+1]
-        h = lambda x: expit((x-x0)/a)
+        x_min = params[ind]
+        h = lambda x: expit((x-x_min)/a)
     else:
-        x_min = np.nanmin(xdata)
+        x_min =  np.quantile(xdata, 0.0001) if ndim == 1 else np.quantile(xdata[:,0], 0.0001)
         h = lambda x: 1
         
-    if frac<=0.5 or frac>=1 or eps<=0 or sigma<=eps:
+    if frac<=0.5 or frac>1 or eps<=0 or sigma<=eps:
         return np.inf
     
-    if (sigmoid) & (x0<x_min): # set transition point
+    if (sigmoid) & (np.atleast_1d(x0)<x_min).any(): # set transition point
         return np.inf
     
     ### NEW lines started ###
-    B1 = y0 - A1 * x0 
+    # use constraint: A1 * x + B1 = y0
+    B1 = y0 - A1 * x0
     B2 = y0 - A2 * x0
     
     f1 = lambda x: A1 * x + B1
     f2 = lambda x: A2 * x + B2
+        
+    if ndim == 1:
+        cond_list = [xdata < x0, xdata >= x0]
+        
+    else:
+        cond_list = [ydata < y0, ydata >= y0]
     
-    cond_list = [xdata < x0, xdata >= x0]
-    func_list = [lambda x: f1(x) * h(x) + (1-h(x)) * f1(x_min-a), 
+    func_list = [lambda x: f1(x) * h(x) + (1-h(x)) * f1(x_min-a),
                  lambda x: f2(x) * h(x) + (1-h(x)) * f2(x_min-a)]
+                 
+    ypred = np.piecewise(xdata, cond_list, func_list)
     
-    ypred =  np.piecewise(xdata, cond_list, func_list)
+    if ndim > 1:
+        ypred = np.average(ypred, weights=weights_filter, axis=-1)
     
     if legendre_terms is not None:
         # background terms
@@ -353,20 +391,20 @@ def eval_likelihood_multi_lin_mix_constr(params, xdata, ydata, n_model=2,
             
         return llh
 
-def eval_likelihood_piecewise(params, xdata, ydata):
-    a2, a1, x0, y0, eps = params
-    
-    if frac<=0.5 or frac>=1 or sigma<=0 or eps<=0:
-        return np.inf
-
-    b1 = y0 - a1*x0 
-    b2 = y0 - a2*x0
-    
-    ypred =  np.piecewise(xdata, [xdata < x0, xdata >= x0], [lambda x: a1*x + b1, lambda x: a2*x + b2])
-    
-    prob = np.exp( -0.5 * (ydata-ypred)**2 / eps**2) / eps
-    
-    return -np.sum(np.log(prob))
+#def eval_likelihood_piecewise(params, xdata, ydata):
+#    a2, a1, x0, y0, eps = params
+#    
+#    if frac<=0.5 or frac>=1 or sigma<=0 or eps<=0:
+#        return np.inf
+#
+#    b1 = y0 - a1*x0 
+#    b2 = y0 - a2*x0
+#    
+#    ypred =  np.piecewise(xdata, [xdata < x0, xdata >= x0], [lambda x: a1*x + b1, lambda x: a2*x + b2])
+#    
+#    prob = np.exp( -0.5 * (ydata-ypred)**2 / eps**2) / eps
+#    
+#    return -np.sum(np.log(prob))
 
 
 def loglike_hist(v, 
