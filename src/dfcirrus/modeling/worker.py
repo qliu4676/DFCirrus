@@ -157,7 +157,7 @@ class Worker:
         self.filled_mask = True
         
     
-    def rescale(self, scale=0.25, method='binning',order=1):
+    def rescale(self, scale=0.25, method='binning'):
         """ Rebin the image. Surface brightness is retained. """
         
         from astropy.nddata import block_reduce
@@ -176,10 +176,10 @@ class Worker:
         if method == 'reproject':
             wcs_ds = downsample_wcs(self.wcs, scale=scale)
             shape_out = (int(shape[0]*scale), int(shape[1]*scale))
-            self.image_G, _ = reproject_interp((image_G, self.wcs), wcs_ds, shape_out=shape_out, order=order)
-            self.image_R, _ = reproject_interp((image_R, self.wcs), wcs_ds, shape_out=shape_out, order=order)
+            self.image_G, _ = reproject_interp((image_G, self.wcs), wcs_ds, shape_out=shape_out, order='bilinear')
+            self.image_R, _ = reproject_interp((image_R, self.wcs), wcs_ds, shape_out=shape_out, order='bilinear')
             
-            mask, _ = reproject_interp((self._mask, self.wcs), wcs_ds, shape_out=shape_out, order=order)
+            mask, _ = reproject_interp((self._mask, self.wcs), wcs_ds, shape_out=shape_out, order=1)
             self.mask = mask.astype(bool)
             
         elif method == 'binning':
@@ -490,8 +490,8 @@ class Worker:
             print(f'Downsampling by {scale_factor}...')
             wcs_ds = downsample_wcs(self.wcs, scale=scale_factor)
             shape_out = (int(self._image_shape[0]*scale_factor), int(self._image_shape[1]*scale_factor))
-            img_ref_R_ds, _ = reproject_interp((img_ref_R, self.wcs), wcs_ds, shape_out=shape_out, order=1)
-            img_ref_G_ds, _ = reproject_interp((img_ref_G, self.wcs), wcs_ds, shape_out=shape_out, order=1)
+            img_ref_R_ds, _ = reproject_interp((img_ref_R, self.wcs), wcs_ds, shape_out=shape_out, order='bilinear')
+            img_ref_G_ds, _ = reproject_interp((img_ref_G, self.wcs), wcs_ds, shape_out=shape_out, order='bilinear')
             mask, _ = reproject_interp((self._mask, self.wcs), wcs_ds, shape_out=shape_out, order=1)
             mask = mask.astype(bool)
             
@@ -548,8 +548,8 @@ class Worker:
         # upsampling
         if (scale_factor != None) and (scale_factor<1):
             print(f'Upsampling to original grid...')
-            img_ref_R, _ = reproject_interp((img_ref_R, wcs_ds), self.wcs, shape_out=self._image_shape, order=1)
-            img_ref_G, _ = reproject_interp((img_ref_G, wcs_ds), self.wcs, shape_out=self._image_shape, order=1)
+            img_ref_R, _ = reproject_interp((img_ref_R, wcs_ds), self.wcs, shape_out=self._image_shape, order='bilinear')
+            img_ref_G, _ = reproject_interp((img_ref_G, wcs_ds), self.wcs, shape_out=self._image_shape, order='bilinear')
             
         self.img_ref_R = img_ref_R
         self.img_ref_G = img_ref_G
