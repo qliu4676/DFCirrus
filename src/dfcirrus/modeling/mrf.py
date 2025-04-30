@@ -353,7 +353,7 @@ class MRF_Result:
         from scipy.ndimage import shift
         is_nan = np.isnan(brightstar_models)
         brightstar_models[is_nan] = 0
-        brightstar_models_shifted = shift(np.ma.array(brightstar_models, mask=is_nan), [0.25, 0.25], cval=0.0, order=3, mode='nearest')
+        brightstar_models_shifted = shift(np.ma.array(brightstar_models, mask=is_nan), [0.25, 0.25], cval=0.0, order='bilinear', mode='nearest')
         brightstar_models_shifted[is_nan] = np.nan
         
         return brightstar_models_shifted

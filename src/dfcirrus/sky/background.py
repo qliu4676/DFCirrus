@@ -36,8 +36,8 @@ class Worker:
             An image file name or numpy array of its pixels.
         wcs: astropy.wcs.wcs
             Astropy wcs. If None, needs to be in the file header.
-        PLA_map: str
-            Path of Planck dust model.
+        PLA_map: str or dfcirrus.sky.dust.PlanckImage
+            Planck dust model class or path to the map.
         mask: np.ndarray, optional
             Mask map.
         """
@@ -66,9 +66,19 @@ class Worker:
         if wcs is not None:
             self.wcs = wcs
 
-        # Read Planck dust model map
-        self.pla_map = PlanckImage(PLA_map)
-
+        # Read Planck dust model map from string or directly
+        if isinstance(PLA_map, str):
+            self.pla_map_path = PLA_map
+            self.pla_map = PlanckImage(PLA_map)
+        elif isinstance(PLA_map, PlanckImage):
+            self.pla_map = PLA_map
+        else:
+            raise Exception('Input Planck map is not in the right form!')
+    
+    def safe_delattr(self, attrname):
+        if hasattr(self, attrname):
+            delattr(self, attrname)
+        
     def downsample_wcs(self, scale=0.25):
         """ Downsample WCS. """
         from .utils import downsample_wcs
@@ -120,8 +130,10 @@ class Worker:
         self.sky_val = np.nanmedian(self.bkg_ds)
 
         # Retrieve Planck dust radiance map
-        pla_map = self.pla_map
-        planck_dust_map = pla_map.reproject(wcs_ds, shape_ds, model=model)
+        planck_dust_map = self.pla_map.reproject(wcs_ds, shape_ds, model=model)
+        
+        # Del the whole map to leave for memory
+        self.safe_delattr('pla_map')
         
         # Multiply the model with a factor to maintain float precision
         if model == 'radiance':
@@ -138,7 +150,7 @@ class Worker:
                           poly_deg_dust=None,
                           model='radiance',
                           scale=0.25,
-                          sn_thre=2,
+                          sn_thre=2.5,
                           b_size=128,
                           dust_ratio=None,
                           init_models=None):
@@ -157,7 +169,7 @@ class Worker:
             Planck dust model in use.
         scale: float, opional, default 0.25
             Downsampling scale.
-        sn_thre: float, opional, default 2
+        sn_thre: float, opional, default 2.5
             SNR threshold for source masking.
         b_size: int, opional, default 128
             Box size used for extracting background.

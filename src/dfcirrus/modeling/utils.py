@@ -16,6 +16,18 @@ from ..io import logger
 
 def mode(x):
     return 2.5*np.nanmedian(x) - 1.5*np.nanmean(x)
+    
+def circular_region(radius):
+    """ Create a circle of a given radius. Values are NaNs outside of the circle. """
+    xx, yy = np.mgrid[-radius:radius+1, -radius:radius+1]
+
+    r_dist = xx**2. + yy**2.
+    circle = r_dist < radius**2.
+
+    circle = circle.astype(float)
+    circle[np.where(circle == 0.)] = np.nan
+
+    return circle
 
 def background_extraction(field, mask=None, return_rms=True,
                           b_size=64, f_size=3, n_iter=5, **kwargs):
@@ -434,7 +446,6 @@ class RHT_worker:
              kernel_replace_masked=9, use_peak=True,
              normed_by_background=False, bkg=1e5):
         """ Run the RHT and compute the max response. """
-        from fil_finder.rollinghough import circular_region
         from photutils.aperture import RectangularAperture
         
         image, mask = self.image.copy(), self.mask.copy()
@@ -449,7 +460,7 @@ class RHT_worker:
         thetas = np.linspace(0, np.pi, n_theta)
         self.thetas = thetas
 
-        circle, mesh = circular_region(radius)
+        circle = circular_region(radius)
         cen_circle = (circle.shape[1]-1)/2., (circle.shape[0]-1)/2.
 
         line_cube = np.empty((n_theta, circle.shape[0], circle.shape[1]))
