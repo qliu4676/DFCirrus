@@ -4,7 +4,7 @@ from scipy import interpolate, ndimage
 
 import astropy.units as u
 from astropy.table import Table
-from astropy.stats import SigmaClip
+from astropy.stats import SigmaClip, mad_std
 from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 
 from photutils.background import Background2D, SExtractorBackground
@@ -313,6 +313,8 @@ def remove_compact_emission(image, mask=None,
                             rht_radius=36,
                             background_percentile=50,
                             fill_mask=True,
+                            add_noise=False,
+                            noise_level=None,
                             use_peak=True,
                             use_output='residual',
                             n_threshold=None,
@@ -393,7 +395,7 @@ def remove_compact_emission(image, mask=None,
             logger.error('Tools of Source Extraction not found!')
             raise NameError
         
-    isolated = ndimage.binary_dilation(isolated, iterations=5)
+    isolated = ndimage.binary_dilation(isolated, iterations=3)
     rht.isolated = isolated
 
     # remove unconnected emission from image and interploate
@@ -407,6 +409,14 @@ def remove_compact_emission(image, mask=None,
 #                                              convolve=convolve_fft)
     else:
         image_proc = image_
+        
+    if add_noise:
+        ma = np.isnan(image_)
+        if noise_level is None:
+            noise_level = mad_std(image_, ignore_nan=True)
+            logger.info(f"Use noise level = {:.2g}".format(n_threshold))
+        noise_image = np.random.normal(loc=0, scale=noise_level, size=image_proc.shape)
+        image_proc[ma] = image_proc[ma] + noise_image[ma]
 
     if plot:
         plt.figure()
