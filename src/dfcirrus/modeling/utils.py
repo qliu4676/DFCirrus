@@ -414,7 +414,7 @@ def remove_compact_emission(image, mask=None,
         ma = np.isnan(image_)
         if noise_level is None:
             noise_level = mad_std(image_, ignore_nan=True)
-            logger.info(f"Use noise level = {:.2g}".format(n_threshold))
+            logger.info(f"Use noise level = {noise_level:.2g}")
         noise_image = np.random.normal(loc=0, scale=noise_level, size=image_proc.shape)
         image_proc[ma] = image_proc[ma] + noise_image[ma]
 
