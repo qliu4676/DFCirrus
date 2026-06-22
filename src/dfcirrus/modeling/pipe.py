@@ -7,7 +7,6 @@ from scipy.special import expit
 from scipy import stats, ndimage
 from functools import partial
 
-import astropy.units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.nddata import Cutout2D
@@ -16,19 +15,11 @@ from astropy.coordinates import SkyCoord
 from astropy.stats import mad_std, SigmaClip, sigma_clip
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel
 
-from photutils.background import MADStdBackgroundRMS
-
 from ..io import logger
 from .worker import Worker
-from .utils import mode, match_gaussian_beam
+from .geometry import downsample_wcs, gaussian_beam_kernel
+from .utils import mode
 from .image import ImageButler, PlanckImage, IRISImage
-
-try:
-    from elderflower.utils import downsample_wcs
-    from elderflower.utils import make_psf_2D
-except:
-    logger.error('elderflower not installed. Missing some utilities.')
-    
 
 p0_RonP = [15., -8, 0.7, 0.001, 3, 0.99]
 p0_GonP = [8., -5, 0.5, 0.001, 3, 0.99]
@@ -41,19 +32,26 @@ def run_cirrus_modeling(fn_g, fn_r,
                         scale=0.25,
                         coords_cutout=None,
                         shape_cutout=(4000, 3000),
-                        p0={'RonP':p0_RonP, 'GonP':p0_GonP, 'RonG':p0_RonG, 'GonR':p0_GonR},
+                        p0=None,
                         p_range=(0,2),
                         g_range=(-4,12),
                         r_range=(-6,18),
                         std_g=None,
                         std_r=None,
                         mask_std=2.5,
+                        planck_path=None,
                         planck_model='radiance',
+                        image_fwhm=6.0,
+                        planck_fwhm=300.0,
                         fit_Planck=True,
                         fill_mask=True,
                         plot=True,
                         target=''):
     
+    if p0 is None:
+        p0 = {'RonP':p0_RonP, 'GonP':p0_GonP,
+              'RonG':p0_RonG, 'GonR':p0_GonR}
+
     foo = ImageButler(hdu_path_G=fn_residual_g, hdu_path_R=fn_residual_r, obj_name=target)
     
     if coords_cutout is None:
@@ -70,16 +68,15 @@ def run_cirrus_modeling(fn_g, fn_r,
     starmods_g_cutout = foo.apply_cutout(starmods_g)
     starmods_r_cutout = foo.apply_cutout(starmods_r)
     
-    bkgrms = MADStdBackgroundRMS(sigma_clip=SigmaClip(cenfunc=np.nanmedian, stdfunc=mad_std))
     mask_nan = np.isnan(image_g_cutout) | np.isnan(image_r_cutout)
 
     for k in range(2):
         if k==0:
             mask = mask_nan.copy()
         if std_g is None:
-            std_g = bkgrms(image_g_cutout[~mask])
+            std_g = mad_std(image_g_cutout[~mask], ignore_nan=True)
         if std_r is None:
-            std_r = bkgrms(image_r_cutout[~mask])
+            std_r = mad_std(image_r_cutout[~mask], ignore_nan=True)
 
         mask_g = starmods_g_cutout > mask_std * std_g
         mask_r = starmods_r_cutout > mask_std * std_r
@@ -109,7 +106,10 @@ def run_cirrus_modeling(fn_g, fn_r,
         worker.CMD(bins=100, xyrange=[[25, 30], [-1.3, 2.7]])
         plt.show()
     
-    pla = PlanckImage('/Users/qliu/Data/PLA/HFI_CompMap_ThermalDustModel_2048_R1.20.fits')
+    if planck_path is None:
+        from .config import default_planck_path
+        planck_path = default_planck_path()
+    pla = PlanckImage(planck_path)
     
     wcs_rp = downsample_wcs(wcs, scale=scale)
     shape_output = int(worker._image_shape[0] * scale), int(worker._image_shape[1] * scale)
@@ -138,14 +138,12 @@ def run_cirrus_modeling(fn_g, fn_r,
         plt.show()
     
     if fit_Planck:
-        # Convolve to Planck beam
-        params = {"fwhm":6.1, "beta":6.7, "frac":0.3,
-                  "n_s":np.array([3.5, 2.1]), "theta_s":np.array([5, 10**2.13])}
-        PSF_DF, psf = make_psf_2D(params['n_s'], params['theta_s'], 
-                                  frac=0.3, beta=6.6, fwhm=6, 
-                                  psf_range=900, pixel_scale=2.5 * (1/scale))
-
-        kernel = match_gaussian_beam(PSF_DF, pixel_scale=2.5 * (1/scale), fwhm_target=5*u.arcmin)
+        # Match the working image to the Planck beam width.
+        kernel = gaussian_beam_kernel(
+            pixel_scale=worker.pixel_scale,
+            fwhm_image=image_fwhm,
+            fwhm_target=planck_fwhm,
+        )
 
         worker.convolve(kernel)
         
@@ -209,7 +207,7 @@ def run_cirrus_modeling(fn_g, fn_r,
     
     return worker
 
-def run_cirrus_removal(worker, rht_radius=18, scale_factor=0.5, vlim=[-3, 15], plot=True, target=''):
+def run_cirrus_removal(worker, rht_radius=18, scale_factor=0.5, vlim=(-3, 15), plot=True, target=''):
     print('Running cirrus decomposition...')
     # Run color modeling
     f_G2R = build_model(worker.fitter_RonG.params_fit, poly_deg=1, sigmoid=False, piecewise=True)

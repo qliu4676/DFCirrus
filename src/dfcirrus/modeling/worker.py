@@ -13,11 +13,7 @@ from astropy.utils import NumpyRNGContext
 from reproject import reproject_interp
 
 from ..io import logger
-
-try:
-    from elderflower.utils import downsample_wcs
-except:
-    logger.error('elderflower not installed. Missing some utilities.')
+from .geometry import downsample_wcs
     
 from .utils import assign_value_by_filters, fill_nan
 
@@ -38,12 +34,12 @@ class Worker:
 
     """
 
-    def __init__(self, images, mask, wcs, 
-                 filters=['G', 'R'], 
+    def __init__(self, images, mask, wcs,
+                 filters=('G', 'R'),
                  pixel_scale=2.5,
-                 bkg_vals=[0,0], 
-                 stds=[5,5],
-                 ZPs=[27.5, 27.5], name=''):
+                 bkg_vals=(0, 0),
+                 stds=(5, 5),
+                 ZPs=(27.5, 27.5), name=''):
         
         self.images = {filt:image for (filt, image) in zip(filters, images)}
         self.filters = filters
@@ -54,7 +50,7 @@ class Worker:
         if np.ndim(mask)==2:
             self.mask = mask
         else:
-            self.masks = {filt:mask for (filt, ma) in zip(filters, mask)}
+            self.masks = {filt:ma for (filt, ma) in zip(filters, mask)}
             self.mask_G = self.masks.get('G')
             self.mask_R = self.masks.get('R')
             self.mask = self.mask_G | self.mask_R            
@@ -117,7 +113,7 @@ class Worker:
     def ratio_GR(self):
         """ G/R Map """
         mask = (self.image_R<=self.bkg_val_R) | (self.image_G<=self.bkg_val_G)
-        ratio_GR = ((self.image_G-self.bkg_val_G)[mask]/(self.image_R-self.bkg_val_R)[mask])
+        ratio_GR = ((self.image_G-self.bkg_val_G)[~mask]/(self.image_R-self.bkg_val_R)[~mask])
         return ratio_GR
     
     @property
@@ -260,12 +256,12 @@ class Worker:
         
         if xlabel.lower()=='g':
             x = self.mag_G.ravel()
-            plt.xlabel('$\mu_g$')
+            plt.xlabel(r'$\mu_g$')
         elif xlabel.lower()=='r':
             x = self.mag_R.ravel()
-            plt.xlabel('$\mu_r$')
+            plt.xlabel(r'$\mu_r$')
         plt.hist2d(x, y, bins=bins, range=xyrange)
-        plt.ylabel('$\mu_g$ - $\mu_r$')
+        plt.ylabel(r'$\mu_g$ - $\mu_r$')
         
 
     def set_cond(self, sigma_lower=-5, sigma_upper=20, pad=0):
@@ -460,7 +456,7 @@ class Worker:
                    plot=True, 
                    initial_fill=True,
                    fill_mask=False,
-                   vlim=[-2,6],
+                   vlim=(-2, 6),
                    figsize=(18, 6)):      
         
         from .utils import remove_compact_emission

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+from matplotlib.colors import AsinhNorm, LogNorm
 from astropy.stats import sigma_clip
 
 from skimage.color import rgb2gray
@@ -14,10 +15,11 @@ try:
 except ModuleNotFoundError:
     PIL_installed = False
 
-try:
-    from elderflower.plotting import AsinhNorm, LogNorm, colorbar
-except:
-    logger.error('elderflower is not installed. Missing some utilities.')
+def colorbar(mappable, ax=None, **kwargs):
+    """Add a Matplotlib colorbar associated with ``ax``."""
+    if ax is None:
+        ax = mappable.axes
+    return ax.figure.colorbar(mappable, ax=ax, **kwargs)
     
 # Temperature table for RGB display
 kelvin_table = {
@@ -56,7 +58,7 @@ def display(image, mask=None,
     
     if fig is None: fig = plt.figure(figsize=(12,8))
     if ax is None: ax = plt.subplot(111)
-    ax.imshow(image, cmap="gray_r",
+    ax.imshow(image, cmap=cmap,
               norm=AsinhNorm(a, vmin=sky_mean-2*sky_std,
                                 vmax=sky_mean+k_std*sky_std))
     ax.axis('off')

@@ -2,13 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate, ndimage
 
-import astropy.units as u
 from astropy.table import Table
 from astropy.stats import SigmaClip, mad_std
 from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_replace_nans
-
-from photutils.background import Background2D, SExtractorBackground
-from photutils.segmentation import detect_sources, deblend_sources, SourceCatalog
 
 from maskfill import maskfill
 
@@ -33,6 +29,8 @@ def background_extraction(field, mask=None, return_rms=True,
                           b_size=64, f_size=3, n_iter=5, **kwargs):
     """ Extract background & rms image using SE estimator with mask """
     
+    from photutils.background import Background2D, SExtractorBackground
+
     try:
         Bkg = Background2D(field, mask=mask,
                            bkg_estimator=SExtractorBackground(),
@@ -58,7 +56,9 @@ def photutils_source_detection(data, mask=None, n_threshold=3, b_size=64, npixel
     
     """ Source detection using photuils """
     
-    back, back_rms = background_extraction(data, b_size=b_size)
+    from photutils.segmentation import detect_sources
+
+    back, back_rms = background_extraction(data, mask=mask, b_size=b_size)
     threshold = back + (n_threshold * back_rms)
     
     segm_sm = detect_sources(data, threshold, npixels=npixels, mask=mask)
@@ -187,13 +187,15 @@ def sep_extract_sources(image,
     return Table(cat), segmap
 
 
-def assign_value_by_filters(values, filters=['G', 'R']):
+def assign_value_by_filters(values, filters=('G', 'R')):
     """ Return a dictionary by filters. """
-    if len(values)==1:
-        result = {filt:values for filt in filters}
-    else:
-        result = {filt:val for (filt, val) in zip(filters, values)}
-    return result
+    if np.ndim(values) == 0:
+        return {filt: values for filt in filters}
+    if len(values) == 1:
+        return {filt: values[0] for filt in filters}
+    if len(values) != len(filters):
+        raise ValueError("values and filters must have the same length")
+    return dict(zip(filters, values))
 
 def resample_image(image, mask=None, shape_new=None,
                    method='cubic', fill_value=0):
@@ -229,47 +231,14 @@ def resample_image(image, mask=None, shape_new=None,
     return image_new, mask_new
     
     
-def match_gaussian_beam(PSF, pixel_scale, fwhm_target=5*u.arcmin, plot=False):
-    """ 
-    Create kernel for matching the to Gaussian beam with taget FWHM.
-    
-    PSF: 2d array of the PSF
-    pixel_scale: pixel scale of image for matching, arcsec/pix 
-    fwhm: FWHM of the target Gaussian, astropy.Angle
-    
+def match_gaussian_beam(pixel_scale, fwhm_image, fwhm_target=300.0):
+    """Create a Gaussian beam-matching kernel.
+
+    All arguments use arcsec, except ``pixel_scale`` which is arcsec/pixel.
     """
-    
-    from astropy.stats import gaussian_fwhm_to_sigma
-    from astropy.modeling.models import Gaussian2D
-    from photutils.psf import create_matching_kernel
-    from photutils.psf import (HanningWindow, TukeyWindow, TopHatWindow)
-    
-    sigma_gbeam = (gaussian_fwhm_to_sigma *  fwhm_target / (pixel_scale * u.arcsec)).decompose().value
-    print("Sigma Beam = %.3f pix"%sigma_gbeam)
-    
-    # Grid
-    size = PSF.shape[0]
-    cen = ((size-1)/2., (size-1)/2.)
-    y, x = np.mgrid[0:size, 0:size]
+    from .geometry import gaussian_beam_kernel
 
-    # Build Gassuain model
-    gm = Gaussian2D(1, cen[0], cen[1], sigma_gbeam, sigma_gbeam)
-    gbeam = gm(x, y)
-    gbeam /= gbeam.sum()
-
-    kernel = create_matching_kernel(PSF, gbeam, window=HanningWindow())
-
-    if plot:
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 5))
-        ax1.imshow(PSF, vmax=1e-5, vmin=1e-9)
-        ax1.set_title('Input PSF')
-        ax2.imshow(gbeam)
-        ax2.set_title('Target PSF')
-        im = ax3.imshow(kernel, cmap='Greys_r')
-        ax3.set_title('Matched Kernel')
-        plt.show()
-    
-    return kernel
+    return gaussian_beam_kernel(pixel_scale, fwhm_image, fwhm_target)
     
 def create_matching_kernel(source_psf, target_psf, window=None):
     """
@@ -378,12 +347,20 @@ def remove_compact_emission(image, mask=None,
     else:
         logger.info('    - Detecting blobs using source detection S/N={:.1f}...'.format(n_threshold))
         if source_extractor == 'sep':
-            cat, segmap = sep_extract_sources(data, thresh=n_threshold, min_area=10, bw=background_size, subtract_sky=False)
+            cat, segmap = sep_extract_sources(
+                image_out,
+                thresh=n_threshold,
+                minarea=10,
+                bw=background_size,
+                subtract_sky=False,
+            )
             segm = segmap.copy()
             for label in np.argwhere(cat['b']/cat['a'] < 0.5):
                 segm[segmap==label] = 0
             isolated = segm>0
         elif source_extractor == 'photutils':
+            from photutils.segmentation import SourceCatalog, deblend_sources
+
             data_ma, segm_sm = photutils_source_detection(image_out, mask=None, n_threshold=n_threshold, b_size=background_size)
             segm_deb = deblend_sources(image_out, segm_sm, npixels=10,
                                        nlevels=64, contrast=0.001)
@@ -402,11 +379,11 @@ def remove_compact_emission(image, mask=None,
     image_[isolated|mask] = np.nan
     
     if fill_mask:
-        image_proc, image_proc_unsmoothed = maskfill(image_, np.isnan(image_), size=kernel_replace_masked)
-        
-        # image_proc = fill_nan_iterative(image_, k0=1)
-#        image_proc = interpolate_replace_nans(image_, Gaussian2DKernel(kernel_replace_masked), 
-#                                              convolve=convolve_fft)
+        image_proc, image_proc_unsmoothed = maskfill(
+            image_,
+            np.isnan(image_),
+            size=kernel_replace_masked,
+        )
     else:
         image_proc = image_
         
@@ -420,12 +397,12 @@ def remove_compact_emission(image, mask=None,
 
     if plot:
         plt.figure()
-        plt.hist(image_conv_sum.ravel())
+        plt.hist(np.asarray(image_out).ravel())
         plt.show()
     
         fig, (ax1,ax2) = plt.subplots(1, 2, figsize=figsize)
         im=ax1.imshow(image, vmin=-2, vmax=3, cmap='viridis')
-        im=ax2.imshow(image_conv_sum, vmin=-2, vmax=3, cmap='viridis')
+        im=ax2.imshow(image_out, vmin=-2, vmax=3, cmap='viridis')
         
         fig, (ax1,ax2) = plt.subplots(1, 2, figsize=figsize)
         im=ax1.imshow(image_smooth, vmin=-2, vmax=3, cmap='viridis')

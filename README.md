@@ -1,5 +1,7 @@
 # DFCirrus
-Modules for modelling Galactic Cirrus imaging obtained by Dragonfly Telephoto Array.
+Tools for modeling Galactic cirrus in deep wide-field imaging using morphology
+and multi-band color constraints. Dragonfly is supported as a built-in preset,
+but the modeling configuration is instrument-independent.
 
 - Sky background modelling using Planck thermal dust models.
 - Cirrus decomposition using morphology and colors.
@@ -19,11 +21,21 @@ Modules for modelling Galactic Cirrus imaging obtained by Dragonfly Telephoto Ar
 
 
 ### Installation
----
 
 ```bash
 cd <install directory>
-git clone https://github.com/DragonflyTelescope/DFCirrus.git
+git clone https://github.com/qliu4676/DFCirrus.git
 cd DFCirrus
 pip install -e .
+```
+
+### Modeling configuration
+
+Start from [`configs/modeling_example.yaml`](configs/modeling_example.yaml).
+Load and validate it with:
+
+```python
+from dfcirrus.modeling import load_config
+
+config = load_config("modeling.yaml", check_files=True)
 ```

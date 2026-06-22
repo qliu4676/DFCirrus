@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dfcirrus"
+version = "0.2.0.dev0"
+description = "Color- and morphology-based modeling of Galactic cirrus"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Qing Liu", email = "qliu@strw.leidenuniv.nl"}]
+dependencies = [
+  "astropy>=5",
+  "joblib",
+  "maskfill",
+  "matplotlib>=3.6",
+  "numpy>=1.23",
+  "photutils>=1.9",
+  "PyYAML>=6",
+  "reproject>=0.10",
+  "scikit-image>=0.20",
+  "scikit-learn>=1.2",
+  "scipy>=1.9",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+sep = ["sep>=1.2"]
+test = ["pytest>=7", "pytest-cov>=4"]
+
+[project.urls]
+Repository = "https://github.com/qliu4676/DFCirrus"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"dfcirrus.presets" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

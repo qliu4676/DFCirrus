@@ -1,0 +1,37 @@
+# Dragonfly defaults for the published g/r cirrus workflow.
+# Wavelength: Angstrom; pixel scale and PSF FWHM: arcsec.
+bands:
+  g:
+    wavelength: 4770
+    zeropoint: 27.5
+    pixel_scale: 2.5
+    psf_fwhm: 6.0
+  r:
+    wavelength: 6231
+    zeropoint: 27.5
+    pixel_scale: 2.5
+    psf_fwhm: 6.0
+
+planck_radiance:
+  path: /Users/qliu/data/HFI_CompMap_ThermalDustModel_2048_R1.20.fits
+
+alignment:
+  reference_band: r
+  psf_match: true
+
+morphology:
+  backend: rht
+  working_pixel_scale: 10
+  rht:
+    radius: 3
+    response: peak
+    angle_bins: auto
+    median_filter_size: 3
+
+color:
+  reference_band: r
+  bands: [g, r]
+  relation: linear
+  regression: bisector
+  bootstrap_samples: 200
+  fit_sigma_range: [-15, 20]
