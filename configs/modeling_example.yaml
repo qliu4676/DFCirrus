@@ -12,9 +12,18 @@ bands:
   g:
     image: data/field-g.fits
     mask: data/field-g-mask.fits
+    wavelength: 4770 # Angstrom
+    pixel_scale: 2.5 # arcsec/pixel
+    psf_fwhm: 6.0   # arcsec
+    zeropoint: 27.5
   r:
     image: data/field-r.fits
     mask: data/field-r-mask.fits
+    wavelength: 6231 # Angstrom
+    pixel_scale: 2.5 # arcsec/pixel
+    psf_fwhm: 6.0   # arcsec
+    zeropoint: 27.5
+  # Add further bands using the same fields.
 
 # Planck thermal-dust radiance HEALPix product.
 planck_radiance:
@@ -49,6 +58,7 @@ color:
   bands: [g, r]
   relation: linear
   regression: bisector
+  combine: median
   bootstrap_samples: 100
   fit_sigma_range: [-15, 20] # relative to measured background RMS
 

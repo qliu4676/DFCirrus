@@ -39,3 +39,15 @@ from dfcirrus.modeling import load_config
 
 config = load_config("modeling.yaml", check_files=True)
 ```
+
+Run the multi-band model with:
+
+```python
+from dfcirrus.modeling import MultiBandModeler
+
+result = MultiBandModeler.from_config("modeling.yaml").run()
+```
+
+Each band is calibrated against Planck radiance and transformed to a shared
+luminance scale. The combined luminance image is morphology-filtered and then
+mapped back to a cirrus model in every configured band.

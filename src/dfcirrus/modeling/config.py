@@ -124,6 +124,7 @@ class ColorConfig:
     bands: tuple[str, ...]
     relation: str = "linear"
     regression: str = "bisector"
+    combine: str = "median"
     bootstrap_samples: int = 200
     fit_sigma_range: tuple[float, float] = (-15.0, 20.0)
 
@@ -245,11 +246,17 @@ class ModelingConfig:
             raise ConfigurationError("morphology.backend must be 'rht'")
 
         color_data = dict(data.get("color", {}))
-        _require_keys(color_data, {"reference_band", "bands", "relation", "regression", "bootstrap_samples", "fit_sigma_range"}, "color")
+        _require_keys(
+            color_data,
+            {"reference_band", "bands", "relation", "regression", "combine", "bootstrap_samples", "fit_sigma_range"},
+            "color",
+        )
         color_bands = tuple(str(name) for name in color_data.get("bands", bands))
         missing_color_bands = set(color_bands) - set(bands)
         if missing_color_bands:
             raise ConfigurationError(f"color.bands contains unknown bands: {sorted(missing_color_bands)}")
+        if set(color_bands) != set(bands):
+            raise ConfigurationError("color.bands must include all configured bands")
         color_reference = str(color_data.get("reference_band", reference_band))
         if color_reference not in color_bands:
             raise ConfigurationError("color.reference_band must be included in color.bands")
@@ -261,9 +268,16 @@ class ModelingConfig:
             bands=color_bands,
             relation=str(color_data.get("relation", "linear")),
             regression=str(color_data.get("regression", "bisector")),
+            combine=str(color_data.get("combine", "median")),
             bootstrap_samples=int(color_data.get("bootstrap_samples", 200)),
             fit_sigma_range=sigma_range,
         )
+        if color.relation != "linear":
+            raise ConfigurationError("color.relation must be 'linear'")
+        if color.regression not in {"linear", "bisector"}:
+            raise ConfigurationError("color.regression must be 'linear' or 'bisector'")
+        if color.combine not in {"mean", "median"}:
+            raise ConfigurationError("color.combine must be 'mean' or 'median'")
         if color.bootstrap_samples < 0:
             raise ConfigurationError("color.bootstrap_samples cannot be negative")
 

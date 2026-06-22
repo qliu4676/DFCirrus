@@ -33,5 +33,6 @@ color:
   bands: [g, r]
   relation: linear
   regression: bisector
+  combine: median
   bootstrap_samples: 200
   fit_sigma_range: [-15, 20]
