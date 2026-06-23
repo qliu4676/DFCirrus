@@ -78,16 +78,21 @@ def restore_grid(image: np.ndarray, grid: WorkingGrid, reference: BandImage) -> 
     return restored
 
 
-def create_morphology_filter(config: MorphologyConfig, mask_config=None):
+def create_morphology_filter(
+    config: MorphologyConfig,
+    mask_config=None,
+    *,
+    random_state: int | np.random.Generator | None = None,
+):
     """Create the configured morphology backend."""
     if config.backend == "rht":
         from .rht import RHTFilter
 
-        return RHTFilter(config, mask_config)
+        return RHTFilter(config, mask_config, random_state=random_state)
     if config.backend == "rht_starlet":
         from .rht_starlet import RHTStarletFilter
 
-        return RHTStarletFilter(config, mask_config)
+        return RHTStarletFilter(config, mask_config, random_state=random_state)
     raise ValueError(f"Unknown morphology backend: {config.backend}")
 
 

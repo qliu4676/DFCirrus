@@ -31,11 +31,12 @@ RHT is the default backend:
 morphology:
   backend: rht
   working_pixel_scale: 2.5  # arcsec/pixel
+  infill:
+    enabled: true
+    backend: maskfill
+    maskfill_window_size: 9 # pixels; positive odd integer
   rht:
     radius: 2               # arcmin
-    maskfill: true
-    infill_backend: maskfill # maskfill (default) or optional cloudcovfix
-    infill_radius: 9        # pixels; positive odd integer
 ```
 
 The sequential backend applies starlet cleanup to the RHT result:
@@ -44,11 +45,15 @@ The sequential backend applies starlet cleanup to the RHT result:
 morphology:
   backend: rht_starlet
   working_pixel_scale: 2.5  # arcsec/pixel
+  infill:
+    enabled: true
+    backend: cloudcovfix
+    patch_size: 51          # pixels
+    training_window: 129    # pixels
+    conditioning_radius: 25 # pixels
+    memory_budget_mb: 256   # MiB
   rht:
     radius: 2               # arcmin
-    maskfill: true
-    infill_backend: maskfill # maskfill (default) or optional cloudcovfix
-    infill_radius: 9        # pixels; positive odd integer
   starlet:
     scales: 5
     keep_scales: [2, 3, 4, 5]
@@ -58,10 +63,14 @@ morphology:
 
 Starlet scale numbers are one-based. The defaults omit the first detail scale
 and retain the remaining scales and coarse residual. With `backend: rht`, the
-starlet stage is not run. `maskfill` enables masked-pixel infilling and
-`infill_backend` selects the installed infilling implementation. It defaults to
-`maskfill`; selecting `cloudcovfix` requires the optional `cloudcovfix` package.
-`infill_radius` sets the odd-sized pixel window passed to the infilling method.
+starlet stage is not run. Morphology-level `infill.enabled` controls masked-pixel
+infilling for either backend. `infill.backend` defaults to `maskfill`; selecting
+`cloudcovfix` requires the optional `cloudcovfix` package. CloudCovFix uses
+`patch_size`, `training_window`, `conditioning_radius`, and `memory_budget_mb`.
+The first three are measured in pixels. At runtime, `patch_size` is increased to
+the smallest odd width larger than the maximum bounding-box extent of any
+connected mask component. CloudCovFix uses `run.random_seed`, matching the color
+fit and other stochastic modeling steps.
 
 ## Command line
 

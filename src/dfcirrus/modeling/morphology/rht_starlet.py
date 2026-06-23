@@ -12,9 +12,13 @@ from .starlet import reconstruct_starlet
 class RHTStarletFilter:
     """Apply starlet scale cleanup to an RHT-filtered image."""
 
-    def __init__(self, config, mask_config=None):
+    def __init__(self, config, mask_config=None, *, random_state=None):
         self.config = config
-        self.rht = RHTFilter(config, mask_config)
+        self.rht = RHTFilter(
+            config,
+            mask_config,
+            random_state=random_state,
+        )
 
     def extract(self, image, mask, reference) -> MorphologyResult:
         """Filter a luminance image."""

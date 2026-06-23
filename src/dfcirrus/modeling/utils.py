@@ -89,11 +89,39 @@ def photutils_source_detection(data, mask=None, n_threshold=3, b_size=64, npixel
 default_kernel = np.array([[1,2,1], [2,4,2], [1,2,1]])
 
 
-def _infill_masked(image, mask, *, backend="maskfill", window_size=9):
-    """Infill masked pixels with the selected optional implementation."""
+def _maximum_connected_mask_extent(mask):
+    """Return the largest row/column span of an 8-connected mask component."""
+    labels, count = ndimage.label(
+        np.asarray(mask, dtype=bool),
+        structure=np.ones((3, 3), dtype=int),
+    )
+    if count == 0:
+        return 0
+    return max(
+        max(region[axis].stop - region[axis].start for axis in (0, 1))
+        for region in ndimage.find_objects(labels)
+        if region is not None
+    )
+
+
+def _infill_masked(
+    image,
+    mask,
+    *,
+    backend="maskfill",
+    maskfill_kwargs=None,
+    cloudcovfix_kwargs=None,
+):
+    """Infill masked pixels with the selected implementation."""
     if backend == "maskfill":
-        filled, _ = maskfill(image, mask, size=window_size)
-        return filled
+        options = {"size": 9}
+        options.update(maskfill_kwargs or {})
+        logger.info("Infilling masked pixels with maskfill")
+        filled, _ = maskfill(image, mask, **options)
+        return filled, {
+            "backend": "maskfill",
+            "maskfill_kwargs": dict(options),
+        }
     if backend == "cloudcovfix":
         try:
             from cloudcovfix import infill
@@ -103,12 +131,42 @@ def _infill_masked(image, mask, *, backend="maskfill", window_size=9):
                 "is not installed. Install cloudcovfix or use the default "
                 "'maskfill' backend."
             ) from exc
-        return infill(
+        options = {
+            "patch_size": 51,
+            "training_window": 129,
+            "conditioning_radius": 25,
+            "memory_budget_mb": 256,
+            "random_state": None,
+        }
+        options.update(cloudcovfix_kwargs or {})
+        logger.info("Infilling masked pixels with CloudCovFix")
+        component_extent = _maximum_connected_mask_extent(mask)
+        configured_patch_size = int(options["patch_size"])
+        effective_patch_size = max(configured_patch_size, component_extent + 1)
+        if effective_patch_size % 2 == 0:
+            effective_patch_size += 1
+        if effective_patch_size != configured_patch_size:
+            effective_radius = effective_patch_size // 2
+            logger.info(
+                f"Increasing CloudCovFix patch_size from {configured_patch_size} "
+                f"to {effective_patch_size} pixels to exceed the largest "
+                f"connected mask extent ({component_extent} pixels); setting "
+                f"conditioning_radius to {effective_radius} pixels"
+            )
+            options["conditioning_radius"] = effective_radius
+        options["patch_size"] = effective_patch_size
+        options["progress"] = True
+        result = infill(
             image,
             mask,
-            patch_size=max(3, window_size),
-            progress=False,
-        ).mean
+            **options,
+        )
+        return result.mean, {
+            "backend": "cloudcovfix",
+            "cloudcovfix_kwargs": dict(options),
+            "configured_patch_size": configured_patch_size,
+            "maximum_mask_component_extent": component_extent,
+        }
     raise ValueError(f"Unknown infill backend: {backend!r}")
 
 def _byteswap(arr):
@@ -330,6 +388,11 @@ def remove_compact_emission(image, mask=None,
                             n_threshold=None,
                             kernel_replace_masked=9,
                             infill_backend='maskfill',
+                            patch_size=51,
+                            training_window=129,
+                            conditioning_radius=25,
+                            memory_budget_mb=256,
+                            random_state=None,
                             background_size=128,
                             source_extractor='photutils',
                             plot=False, figsize=(18, 6)):
@@ -443,12 +506,20 @@ def remove_compact_emission(image, mask=None,
         window_size = max(1, int(kernel_replace_masked))
         if window_size % 2 == 0:
             window_size += 1
-        image_proc = _infill_masked(
+        image_proc, infill_metadata = _infill_masked(
             image_,
             np.isnan(image_),
             backend=infill_backend,
-            window_size=window_size,
+            maskfill_kwargs={"size": window_size},
+            cloudcovfix_kwargs={
+                "patch_size": patch_size,
+                "training_window": training_window,
+                "conditioning_radius": conditioning_radius,
+                "memory_budget_mb": memory_budget_mb,
+                "random_state": random_state,
+            },
         )
+        rht.infill_metadata = infill_metadata
     else:
         image_proc = image_
         
@@ -457,7 +528,8 @@ def remove_compact_emission(image, mask=None,
         if noise_level is None:
             noise_level = mad_std(image_, ignore_nan=True)
             logger.info(f"Use noise level = {noise_level:.2g}")
-        noise_image = np.random.normal(loc=0, scale=noise_level, size=image_proc.shape)
+        rng = np.random.default_rng(random_state)
+        noise_image = rng.normal(loc=0, scale=noise_level, size=image_proc.shape)
         image_proc[ma] = image_proc[ma] + noise_image[ma]
 
     if plot:

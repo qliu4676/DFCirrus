@@ -11,9 +11,10 @@ from .base import MorphologyResult, restore_grid, to_working_grid
 class RHTFilter:
     """Extract cirrus-like structure with directional line filters."""
 
-    def __init__(self, config, mask_config=None):
+    def __init__(self, config, mask_config=None, *, random_state=None):
         self.config = config
         self.mask_config = mask_config
+        self.random_state = random_state
 
     def extract(self, image, mask, reference) -> MorphologyResult:
         """Filter a luminance image."""
@@ -38,7 +39,8 @@ class RHTFilter:
             2,
             int(round(self.config.rht.radius * 60.0 / self.config.working_pixel_scale)),
         )
-        fill_mask = self.config.rht.maskfill
+        infill = self.config.infill
+        fill_mask = infill.enabled
         filtered, details = remove_compact_emission(
             working_image,
             mask=grid.mask,
@@ -57,8 +59,13 @@ class RHTFilter:
             ),
             quantile=self.config.compact_rejection.quantile_fallback,
             fill_mask=fill_mask,
-            kernel_replace_masked=self.config.rht.infill_radius,
-            infill_backend=self.config.rht.infill_backend,
+            kernel_replace_masked=infill.maskfill_window_size,
+            infill_backend=infill.backend,
+            patch_size=infill.patch_size,
+            training_window=infill.training_window,
+            conditioning_radius=infill.conditioning_radius,
+            memory_budget_mb=infill.memory_budget_mb,
+            random_state=self.random_state,
         )
         restored = restore_grid(filtered, grid, reference)
         restored[mask] = np.nan
@@ -80,9 +87,9 @@ class RHTFilter:
             metadata={
                 "radius_pixels": radius,
                 "working_pixel_scale": self.config.working_pixel_scale,
-                "maskfill": fill_mask,
-                "infill_backend": self.config.rht.infill_backend,
-                "infill_radius": self.config.rht.infill_radius,
+                "infill_enabled": fill_mask,
+                "infill_backend": infill.backend,
+                **getattr(details, "infill_metadata", {}),
             },
         )
 

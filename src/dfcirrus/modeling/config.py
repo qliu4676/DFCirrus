@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
+import warnings
 
 import yaml
 
@@ -101,9 +102,6 @@ class RHTConfig:
     response: str = "peak"
     angle_bins: int | str = "auto"
     median_filter_size: int = 3
-    maskfill: bool = True
-    infill_backend: str = "maskfill"
-    infill_radius: int = 9
 
 
 @dataclass(frozen=True)
@@ -122,9 +120,21 @@ class StarletConfig:
 
 
 @dataclass(frozen=True)
+class InfillConfig:
+    enabled: bool = True
+    backend: str = "maskfill"
+    maskfill_window_size: int = 9
+    patch_size: int = 51
+    training_window: int = 129
+    conditioning_radius: float = 25.0
+    memory_budget_mb: float = 256.0
+
+
+@dataclass(frozen=True)
 class MorphologyConfig:
     backend: str = "rht"
     working_pixel_scale: float = 2.5
+    infill: InfillConfig = field(default_factory=InfillConfig)
     rht: RHTConfig = field(default_factory=RHTConfig)
     starlet: StarletConfig = field(default_factory=StarletConfig)
     compact_rejection: CompactRejectionConfig = field(default_factory=CompactRejectionConfig)
@@ -223,8 +233,22 @@ class ModelingConfig:
         morphology_data = dict(data.get("morphology", {}))
         _require_keys(
             morphology_data,
-            {"backend", "working_pixel_scale", "rht", "starlet", "compact_rejection"},
+            {
+                "backend", "working_pixel_scale", "infill_enabled",
+                "infill_backend", "maskfill_window_size", "patch_size",
+                "training_window", "conditioning_radius", "memory_budget_mb",
+                "infill", "rht", "starlet", "compact_rejection",
+            },
             "morphology",
+        )
+        infill_data = dict(morphology_data.get("infill", {}))
+        _require_keys(
+            infill_data,
+            {
+                "enabled", "backend", "maskfill_window_size", "patch_size",
+                "training_window", "conditioning_radius", "memory_budget_mb",
+            },
+            "morphology.infill",
         )
         rht_data = dict(morphology_data.get("rht", {}))
         _require_keys(
@@ -240,26 +264,56 @@ class ModelingConfig:
             angle_bins = int(angle_bins)
             if angle_bins < 1:
                 raise ConfigurationError("morphology.rht.angle_bins must be positive or 'auto'")
-        infill_radius = int(rht_data.get("infill_radius", 9))
-        if infill_radius < 1 or infill_radius % 2 == 0:
+        legacy_values = {}
+        for old_name, new_name in (
+            ("infill_enabled", "enabled"),
+            ("infill_backend", "backend"),
+            ("maskfill_window_size", "maskfill_window_size"),
+            ("patch_size", "patch_size"),
+            ("training_window", "training_window"),
+            ("conditioning_radius", "conditioning_radius"),
+            ("memory_budget_mb", "memory_budget_mb"),
+        ):
+            if old_name in morphology_data:
+                warnings.warn(
+                    f"morphology.{old_name} is deprecated; use "
+                    f"morphology.infill.{new_name}",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                legacy_values[new_name] = morphology_data[old_name]
+        for old_name, new_name in (
+            ("maskfill", "enabled"),
+            ("infill_backend", "backend"),
+            ("infill_radius", "maskfill_window_size"),
+        ):
+            if old_name in rht_data:
+                warnings.warn(
+                    f"morphology.rht.{old_name} is deprecated; use "
+                    f"morphology.infill.{new_name}",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                legacy_values[new_name] = rht_data[old_name]
+
+        maskfill_window_size = int(
+            legacy_values.get(
+                "maskfill_window_size",
+                infill_data.get("maskfill_window_size", 9),
+            )
+        )
+        if maskfill_window_size < 1 or maskfill_window_size % 2 == 0:
             raise ConfigurationError(
-                "morphology.rht.infill_radius must be a positive odd integer"
+                "morphology.infill.maskfill_window_size must be a positive odd integer"
             )
         rht = RHTConfig(
             radius=_positive(rht_data.get("radius", 2), "morphology.rht.radius"),
             response=str(rht_data.get("response", "peak")),
             angle_bins=angle_bins,
             median_filter_size=int(rht_data.get("median_filter_size", 3)),
-            maskfill=bool(rht_data.get("maskfill", masks.infill_small_holes)),
-            infill_backend=str(rht_data.get("infill_backend", "maskfill")),
-            infill_radius=infill_radius,
         )
         if rht.response not in {"peak", "percentile"}:
             raise ConfigurationError("morphology.rht.response must be 'peak' or 'percentile'")
-        if rht.infill_backend not in {"maskfill", "cloudcovfix"}:
-            raise ConfigurationError(
-                "morphology.rht.infill_backend must be 'maskfill' or 'cloudcovfix'"
-            )
 
         starlet_data = dict(morphology_data.get("starlet", {}))
         _require_keys(
@@ -299,15 +353,67 @@ class ModelingConfig:
         )
         if compact.method not in {"segmentation", "quantile"}:
             raise ConfigurationError("compact_rejection.method must be 'segmentation' or 'quantile'")
+        infill = InfillConfig(
+            enabled=bool(
+                legacy_values.get(
+                    "enabled",
+                    infill_data.get("enabled", masks.infill_small_holes),
+                )
+            ),
+            backend=str(
+                legacy_values.get(
+                    "backend",
+                    infill_data.get("backend", "maskfill"),
+                )
+            ),
+            maskfill_window_size=maskfill_window_size,
+            patch_size=int(legacy_values.get("patch_size", infill_data.get("patch_size", 51))),
+            training_window=int(
+                legacy_values.get("training_window", infill_data.get("training_window", 129))
+            ),
+            conditioning_radius=_positive(
+                legacy_values.get(
+                    "conditioning_radius", infill_data.get("conditioning_radius", 25)
+                ),
+                "morphology.infill.conditioning_radius",
+            ),
+            memory_budget_mb=_positive(
+                legacy_values.get(
+                    "memory_budget_mb", infill_data.get("memory_budget_mb", 256)
+                ),
+                "morphology.infill.memory_budget_mb",
+            ),
+        )
         morphology = MorphologyConfig(
             backend=str(morphology_data.get("backend", "rht")),
             working_pixel_scale=_positive(morphology_data.get("working_pixel_scale", 2.5), "morphology.working_pixel_scale"),
+            infill=infill,
             rht=rht,
             starlet=starlet,
             compact_rejection=compact,
         )
         if morphology.backend not in {"rht", "rht_starlet"}:
             raise ConfigurationError("morphology.backend must be 'rht' or 'rht_starlet'")
+        if infill.backend not in {"maskfill", "cloudcovfix"}:
+            raise ConfigurationError(
+                "morphology.infill.backend must be 'maskfill' or 'cloudcovfix'"
+            )
+        if infill.patch_size < 3 or infill.patch_size % 2 == 0:
+            raise ConfigurationError(
+                "morphology.infill.patch_size must be an odd integer of at least 3"
+            )
+        if infill.training_window < 1 or infill.training_window % 2 == 0:
+            raise ConfigurationError(
+                "morphology.infill.training_window must be a positive odd integer"
+            )
+        if infill.training_window < infill.patch_size:
+            raise ConfigurationError(
+                "morphology.infill.training_window must be at least patch_size"
+            )
+        if infill.conditioning_radius > infill.patch_size // 2:
+            raise ConfigurationError(
+                "morphology.infill.conditioning_radius cannot exceed half the patch size"
+            )
 
         color_data = dict(data.get("color", {}))
         _require_keys(
@@ -408,6 +514,6 @@ def default_planck_path() -> str:
 
 
 __all__ = [
-    "BandConfig", "ColorConfig", "ConfigurationError", "ModelingConfig",
+    "BandConfig", "ColorConfig", "ConfigurationError", "InfillConfig", "ModelingConfig",
     "MorphologyConfig", "default_planck_path", "load_config",
 ]

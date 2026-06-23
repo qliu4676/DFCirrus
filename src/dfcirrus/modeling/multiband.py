@@ -146,6 +146,7 @@ class MultiBandModeler:
             backend = create_morphology_filter(
                 self.config.morphology,
                 self.config.masks,
+                random_state=self.config.run.random_seed,
             )
             morphology_result = backend.extract(luminance, mask, reference)
             filtered_luminance = morphology_result.image

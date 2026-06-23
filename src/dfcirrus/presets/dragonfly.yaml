@@ -22,14 +22,19 @@ alignment:
 morphology:
   backend: rht
   working_pixel_scale: 2.5
+  infill:
+    enabled: true
+    backend: maskfill
+    maskfill_window_size: 9
+    patch_size: 51
+    training_window: 129
+    conditioning_radius: 25
+    memory_budget_mb: 256
   rht:
     radius: 2
     response: peak
     angle_bins: auto
     median_filter_size: 3
-    maskfill: true
-    infill_backend: maskfill
-    infill_radius: 9
 
 color:
   reference_band: r
