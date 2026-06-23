@@ -7,15 +7,14 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+import yaml
+from astropy.io import fits
 from astropy.stats import mad_std
-from reproject import reproject_interp
-from scipy import ndimage
-
-from .color import LinearRelation, MultiBandColorModel
+from .color import ColorMeasurement, LinearRelation, MultiBandColorModel
 from .config import ModelingConfig, load_config
 from .data import ImageCollection
-from .geometry import downsample_wcs
 from .image import PlanckImage
+from .morphology import MorphologyResult, create_morphology_filter
 
 
 MorphologyFilter = Callable[[np.ndarray, np.ndarray], np.ndarray | tuple[np.ndarray, object]]
@@ -26,6 +25,7 @@ class MultiBandResult:
     """Outputs from a multi-band cirrus model."""
 
     images: ImageCollection
+    planck_images: ImageCollection
     planck_map: np.ndarray
     planck_relations: dict[str, LinearRelation]
     color_model: MultiBandColorModel
@@ -34,8 +34,54 @@ class MultiBandResult:
     filtered_luminance: np.ndarray
     models: dict[str, np.ndarray]
     residuals: dict[str, np.ndarray]
+    colors: dict[str, ColorMeasurement]
     mask: np.ndarray
+    fit_mask: np.ndarray
     morphology_result: object | None = None
+
+    def write(self, output_dir: str | Path, *, overwrite: bool = False) -> None:
+        """Write model images and colors."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        reference = self.images[self.color_model.reference_band]
+        header = reference.wcs.to_header()
+        header["BUNIT"] = "kJy/sr"
+        fits.writeto(
+            output_dir / "luminance.fits",
+            self.luminance,
+            header,
+            overwrite=overwrite,
+        )
+        fits.writeto(
+            output_dir / "luminance_filtered.fits",
+            self.filtered_luminance,
+            header,
+            overwrite=overwrite,
+        )
+        for name, model in self.models.items():
+            fits.writeto(
+                output_dir / f"cirrus_model_{name}.fits",
+                model,
+                header,
+                overwrite=overwrite,
+            )
+            fits.writeto(
+                output_dir / f"residual_{name}.fits",
+                self.residuals[name],
+                header,
+                overwrite=overwrite,
+            )
+        color_data = {
+            name: {
+                "value": measurement.value,
+                "error": measurement.error,
+                "unit": "mag",
+                "source": measurement.source,
+            }
+            for name, measurement in self.colors.items()
+        }
+        with (output_dir / "cirrus_colors.yaml").open("w", encoding="utf-8") as stream:
+            yaml.safe_dump(color_data, stream, sort_keys=False)
 
 
 class MultiBandModeler:
@@ -89,23 +135,35 @@ class MultiBandModeler:
             combine=self.config.color.combine,
             regression=self.config.color.regression,
             mask=fit_mask,
+            bootstrap_samples=self.config.color.bootstrap_samples,
+            random_state=self.config.run.random_seed,
         )
 
         band_luminance = color.transform(images)
         luminance = color.luminance(images)
         mask = images.combined_mask(self.config.masks.combine) | ~np.isfinite(luminance)
         if morphology_filter is None:
-            filtered_luminance, morphology_result = self._filter_morphology(
-                luminance,
-                mask,
-                reference,
+            backend = create_morphology_filter(
+                self.config.morphology,
+                self.config.masks,
             )
+            morphology_result = backend.extract(luminance, mask, reference)
+            filtered_luminance = morphology_result.image
         else:
             output = morphology_filter(luminance.copy(), mask.copy())
             if isinstance(output, tuple):
-                filtered_luminance, morphology_result = output
+                filtered_luminance, details = output
+                morphology_result = MorphologyResult(
+                    image=np.asarray(filtered_luminance),
+                    backend="custom",
+                    metadata={"details": details},
+                )
             else:
-                filtered_luminance, morphology_result = output, None
+                filtered_luminance = output
+                morphology_result = MorphologyResult(
+                    image=np.asarray(output),
+                    backend="custom",
+                )
         filtered_luminance = np.asarray(filtered_luminance, dtype=float)
         if filtered_luminance.shape != luminance.shape:
             raise ValueError("The morphology filter changed the image shape")
@@ -124,6 +182,7 @@ class MultiBandModeler:
 
         return MultiBandResult(
             images=images,
+            planck_images=planck_images,
             planck_map=planck_map,
             planck_relations=color.planck_relations,
             color_model=color,
@@ -132,7 +191,9 @@ class MultiBandModeler:
             filtered_luminance=filtered_luminance,
             models=models,
             residuals=residuals,
+            colors=color.colors("planck"),
             mask=mask,
+            fit_mask=fit_mask,
             morphology_result=morphology_result,
         )
 
@@ -147,74 +208,6 @@ class MultiBandModeler:
                 mask |= image.data < center + lower * scatter
                 mask |= image.data > center + upper * scatter
         return mask
-
-    def _filter_morphology(self, luminance, mask, reference):
-        from .utils import remove_compact_emission
-
-        working_scale = self.config.morphology.working_pixel_scale
-        if working_scale < reference.pixel_scale:
-            raise ValueError("morphology.working_pixel_scale cannot be finer than the image grid")
-        scale = reference.pixel_scale / working_scale
-        if scale < 1:
-            working_wcs = downsample_wcs(reference.wcs, scale)
-            shape = (
-                max(1, int(round(reference.shape[0] * scale))),
-                max(1, int(round(reference.shape[1] * scale))),
-            )
-            working_image, footprint = reproject_interp(
-                (luminance, reference.wcs),
-                working_wcs,
-                shape_out=shape,
-                order="bilinear",
-            )
-            working_mask, _ = reproject_interp(
-                (mask.astype(float), reference.wcs),
-                working_wcs,
-                shape_out=shape,
-                order="nearest-neighbor",
-            )
-            working_mask = (working_mask > 0.5) | (footprint <= 0) | ~np.isfinite(working_image)
-        else:
-            working_wcs = reference.wcs
-            working_image = luminance.copy()
-            working_mask = mask.copy()
-
-        median_size = self.config.morphology.rht.median_filter_size
-        if median_size > 1:
-            finite_fill = np.nanmedian(working_image[~working_mask])
-            filtered_input = working_image.copy()
-            filtered_input[working_mask] = finite_fill
-            working_image = ndimage.median_filter(filtered_input, size=median_size)
-            working_image[working_mask] = np.nan
-
-        radius = max(
-            2,
-            int(round(self.config.morphology.rht.radius * 60.0 / working_scale)),
-        )
-        fill_radius = max(
-            1,
-            int(round(self.config.masks.maximum_infill_radius / working_scale)),
-        )
-        filtered, details = remove_compact_emission(
-            working_image,
-            mask=working_mask,
-            kernel_type="linear",
-            rht_radius=radius,
-            use_peak=self.config.morphology.rht.response == "peak",
-            n_threshold=self.config.morphology.compact_rejection.threshold_sigma,
-            quantile=self.config.morphology.compact_rejection.quantile_fallback,
-            fill_mask=self.config.masks.infill_small_holes,
-            kernel_replace_masked=fill_radius,
-        )
-        if scale < 1:
-            filtered, _ = reproject_interp(
-                (filtered, working_wcs),
-                reference.wcs,
-                shape_out=reference.shape,
-                order="bilinear",
-            )
-        return filtered, details
-
 
 def run_multiband_modeling(
     config: ModelingConfig | str | Path,

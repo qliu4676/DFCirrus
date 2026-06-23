@@ -29,6 +29,9 @@ dependencies = [
 sep = ["sep>=1.2"]
 test = ["pytest>=7", "pytest-cov>=4"]
 
+[project.scripts]
+dfcirrus = "dfcirrus.cli:main"
+
 [project.urls]
 Repository = "https://github.com/qliu4676/DFCirrus"
 

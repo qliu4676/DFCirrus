@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate, ndimage
+from contextlib import contextmanager
+import inspect
+import warnings
 
 from astropy.table import Table
 from astropy.stats import SigmaClip, mad_std
@@ -9,6 +12,17 @@ from astropy.convolution import convolve_fft, Gaussian2DKernel, interpolate_repl
 from maskfill import maskfill
 
 from ..io import logger
+
+
+@contextmanager
+def _quiet_photutils_import():
+    try:
+        from tqdm import TqdmWarning
+    except ImportError:
+        TqdmWarning = Warning
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="IProgress not found.*", category=TqdmWarning)
+        yield
 
 def mode(x):
     return 2.5*np.nanmedian(x) - 1.5*np.nanmean(x)
@@ -29,7 +43,8 @@ def background_extraction(field, mask=None, return_rms=True,
                           b_size=64, f_size=3, n_iter=5, **kwargs):
     """ Extract background & rms image using SE estimator with mask """
     
-    from photutils.background import Background2D, SExtractorBackground
+    with _quiet_photutils_import():
+        from photutils.background import Background2D, SExtractorBackground
 
     try:
         Bkg = Background2D(field, mask=mask,
@@ -56,13 +71,16 @@ def photutils_source_detection(data, mask=None, n_threshold=3, b_size=64, npixel
     
     """ Source detection using photuils """
     
-    from photutils.segmentation import detect_sources
+    with _quiet_photutils_import():
+        from photutils.segmentation import detect_sources
 
     back, back_rms = background_extraction(data, mask=mask, b_size=b_size)
     threshold = back + (n_threshold * back_rms)
     
-    segm_sm = detect_sources(data, threshold, npixels=npixels, mask=mask)
-    ma = segm_sm.data!=0
+    segm_sm = detect_sources(data, threshold, npixels, mask=mask)
+    if segm_sm is None:
+        return np.ma.array(data - back, mask=mask), None
+    ma = segm_sm.data != 0
     data_ma = np.ma.array(data - back, mask=ma)
 
     return data_ma, segm_sm
@@ -302,8 +320,15 @@ def remove_compact_emission(image, mask=None,
     
     """
 
-    image_ = image.copy()
-    image = np.ma.array(image, mask=mask)
+    image_data = np.asarray(np.ma.getdata(image), dtype=float)
+    input_mask = np.ma.getmaskarray(image)
+    if mask is None:
+        mask = input_mask | ~np.isfinite(image_data)
+    else:
+        mask = np.asarray(mask, dtype=bool) | input_mask | ~np.isfinite(image_data)
+    image_ = image_data.copy()
+    image = image_data.copy()
+    image[mask] = np.nan
     
     rht = RHT_worker(image, mask, radius=rht_radius)
     
@@ -359,15 +384,27 @@ def remove_compact_emission(image, mask=None,
                 segm[segmap==label] = 0
             isolated = segm>0
         elif source_extractor == 'photutils':
-            from photutils.segmentation import SourceCatalog, deblend_sources
+            with _quiet_photutils_import():
+                from photutils.segmentation import deblend_sources
 
-            data_ma, segm_sm = photutils_source_detection(image_out, mask=None, n_threshold=n_threshold, b_size=background_size)
-            segm_deb = deblend_sources(image_out, segm_sm, npixels=10,
-                                       nlevels=64, contrast=0.001)
-
-            cat_segm = SourceCatalog(image, segm_deb)
-            segm_deb.keep_labels(segm_deb.labels[cat_segm.elongation<2])
-            isolated = segm_deb.data>0
+            _, segm_sm = photutils_source_detection(
+                image_out,
+                mask=mask,
+                n_threshold=n_threshold,
+                b_size=background_size,
+            )
+            if segm_sm is None:
+                isolated = np.zeros_like(image_out, dtype=bool)
+            else:
+                parameters = inspect.signature(deblend_sources).parameters
+                kwargs = {"contrast": 0.001}
+                kwargs["n_levels" if "n_levels" in parameters else "nlevels"] = 64
+                if "progress_bar" in parameters:
+                    kwargs["progress_bar"] = False
+                segm_deb = deblend_sources(image_out, segm_sm, 10, **kwargs)
+                elongation = _segment_elongations(segm_deb.data, segm_deb.labels)
+                compact_labels = segm_deb.labels[np.isfinite(elongation) & (elongation < 2)]
+                isolated = np.isin(segm_deb.data, compact_labels)
         else:
             logger.error('Tools of Source Extraction not found!')
             raise NameError
@@ -379,10 +416,13 @@ def remove_compact_emission(image, mask=None,
     image_[isolated|mask] = np.nan
     
     if fill_mask:
+        window_size = max(1, int(kernel_replace_masked))
+        if window_size % 2 == 0:
+            window_size += 1
         image_proc, image_proc_unsmoothed = maskfill(
             image_,
             np.isnan(image_),
-            size=kernel_replace_masked,
+            size=window_size,
         )
     else:
         image_proc = image_
@@ -419,21 +459,22 @@ class RHT_worker:
     """
 
     def __init__(self, image, mask, radius=36):
-        
-        self.image = image
-        self.mask = mask
+        self.image = np.asarray(np.ma.getdata(image), dtype=float)
+        self.mask = np.asarray(mask, dtype=bool) | np.ma.getmaskarray(image)
+        self.image[self.mask] = np.nan
         self.radius = radius
         
         self.image_shape = image.shape
         
-        self.bkg = np.nanmedian(image[~mask])
+        self.bkg = np.nanmedian(self.image[~self.mask])
 
     def work(self, n_theta=None,
              background_percentile=50,
              kernel_replace_masked=9, use_peak=True,
              normed_by_background=False, bkg=1e5):
         """ Run the RHT and compute the max response. """
-        from photutils.aperture import RectangularAperture
+        with _quiet_photutils_import():
+            from photutils.aperture import RectangularAperture
         
         image, mask = self.image.copy(), self.mask.copy()
         radius = self.radius
@@ -453,7 +494,12 @@ class RHT_worker:
         line_cube = np.empty((n_theta, circle.shape[0], circle.shape[1]))
         for k, theta in enumerate(thetas):
             PA = theta - np.pi/2.
-            rect_mask = RectangularAperture(cen_circle, 2*circle.shape[0], 2, PA).to_mask()
+            rect_mask = RectangularAperture(
+                cen_circle,
+                2 * circle.shape[0],
+                2,
+                theta=PA,
+            ).to_mask()
             line_cube[k] = rect_mask.to_image(circle.shape) * circle
         self.line_cube = line_cube
 
@@ -464,11 +510,10 @@ class RHT_worker:
             imgs_conv[i] = img_conv
             
         self.images_conv = imgs_conv
-        imgs_conv = np.ma.array(imgs_conv, mask=np.isnan(imgs_conv))
         
         size_mf = np.max([np.min([radius//4, 4]), 1])
         
-        logger.info('    - Smoothing the image by median filtering and caculating the residual...')
+        logger.info('    - Smoothing the image by median filtering and calculating the residual...')
         if np.isnan(image).any():
             logger.info('    - Filling nan values for smoothing...')
             # image = fill_nan_iterative(image, k0=1)
@@ -504,6 +549,20 @@ class RHT_worker:
         self.image_residual = residual_conv
         self.image_ratio = ratio_conv
         #self.image_conv_bkg = image_conv_bkg
+
+
+def _segment_elongations(segmentation, labels):
+    """Measure segment elongation from binary second moments."""
+    elongations = np.full(len(labels), np.nan, dtype=float)
+    for index, label_value in enumerate(labels):
+        yy, xx = np.nonzero(segmentation == label_value)
+        if xx.size < 3:
+            continue
+        covariance = np.cov(np.vstack((xx, yy)), bias=True)
+        eigenvalues = np.linalg.eigvalsh(covariance)
+        if eigenvalues[0] > 0:
+            elongations[index] = np.sqrt(eigenvalues[-1] / eigenvalues[0])
+    return elongations
         
         
 def fill_nan(image, image_fill, max_distance=1):

@@ -111,10 +111,19 @@ class CompactRejectionConfig:
 
 
 @dataclass(frozen=True)
+class StarletConfig:
+    scales: int = 5
+    keep_scales: tuple[int, ...] = (3, 4, 5)
+    threshold_sigma: float = 0.0
+    include_coarse: bool = False
+
+
+@dataclass(frozen=True)
 class MorphologyConfig:
     backend: str = "rht"
     working_pixel_scale: float = 10.0
     rht: RHTConfig = field(default_factory=RHTConfig)
+    starlet: StarletConfig = field(default_factory=StarletConfig)
     compact_rejection: CompactRejectionConfig = field(default_factory=CompactRejectionConfig)
 
 
@@ -209,7 +218,11 @@ class ModelingConfig:
             raise ConfigurationError("masks.combine must be 'union' or 'intersection'")
 
         morphology_data = dict(data.get("morphology", {}))
-        _require_keys(morphology_data, {"backend", "working_pixel_scale", "rht", "compact_rejection"}, "morphology")
+        _require_keys(
+            morphology_data,
+            {"backend", "working_pixel_scale", "rht", "starlet", "compact_rejection"},
+            "morphology",
+        )
         rht_data = dict(morphology_data.get("rht", {}))
         _require_keys(rht_data, {"radius", "response", "angle_bins", "median_filter_size"}, "morphology.rht")
         angle_bins = rht_data.get("angle_bins", "auto")
@@ -226,6 +239,28 @@ class ModelingConfig:
         if rht.response not in {"peak", "percentile"}:
             raise ConfigurationError("morphology.rht.response must be 'peak' or 'percentile'")
 
+        starlet_data = dict(morphology_data.get("starlet", {}))
+        _require_keys(
+            starlet_data,
+            {"scales", "keep_scales", "threshold_sigma", "include_coarse"},
+            "morphology.starlet",
+        )
+        scales = int(starlet_data.get("scales", 5))
+        if scales < 1:
+            raise ConfigurationError("morphology.starlet.scales must be positive")
+        keep_scales = tuple(int(value) for value in starlet_data.get("keep_scales", (3, 4, 5)))
+        if not keep_scales or min(keep_scales) < 1 or max(keep_scales) > scales:
+            raise ConfigurationError("morphology.starlet.keep_scales must be within the decomposition scales")
+        threshold_sigma = float(starlet_data.get("threshold_sigma", 0))
+        if threshold_sigma < 0:
+            raise ConfigurationError("morphology.starlet.threshold_sigma cannot be negative")
+        starlet = StarletConfig(
+            scales=scales,
+            keep_scales=keep_scales,
+            threshold_sigma=threshold_sigma,
+            include_coarse=bool(starlet_data.get("include_coarse", False)),
+        )
+
         compact_data = dict(morphology_data.get("compact_rejection", {}))
         _require_keys(compact_data, {"method", "threshold_sigma", "quantile_fallback"}, "morphology.compact_rejection")
         quantile = float(compact_data.get("quantile_fallback", 0.995))
@@ -236,14 +271,17 @@ class ModelingConfig:
             threshold_sigma=_positive(compact_data.get("threshold_sigma", 3), "compact_rejection.threshold_sigma"),
             quantile_fallback=quantile,
         )
+        if compact.method not in {"segmentation", "quantile"}:
+            raise ConfigurationError("compact_rejection.method must be 'segmentation' or 'quantile'")
         morphology = MorphologyConfig(
             backend=str(morphology_data.get("backend", "rht")),
             working_pixel_scale=_positive(morphology_data.get("working_pixel_scale", 10), "morphology.working_pixel_scale"),
             rht=rht,
+            starlet=starlet,
             compact_rejection=compact,
         )
-        if morphology.backend != "rht":
-            raise ConfigurationError("morphology.backend must be 'rht'")
+        if morphology.backend not in {"rht", "starlet"}:
+            raise ConfigurationError("morphology.backend must be 'rht' or 'starlet'")
 
         color_data = dict(data.get("color", {}))
         _require_keys(

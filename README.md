@@ -8,11 +8,12 @@ but the modeling configuration is instrument-independent.
 
 ### Dependencies
 
+- Python>=3.12.12
 - matplotlib
-- numpy
+- numpy>=2.4.4
 - scipy>=1.6.0
-- astropy>=4.0
-- photutils>=0.7.2
+- astropy>=7.2.0
+- photutils>=3.0.0
 - scikit-learn>=0.24.2
 - scikit-image>=0.19.2
 - reproject>=0.9
@@ -51,3 +52,6 @@ result = MultiBandModeler.from_config("modeling.yaml").run()
 Each band is calibrated against Planck radiance and transformed to a shared
 luminance scale. The combined luminance image is morphology-filtered and then
 mapped back to a cirrus model in every configured band.
+
+See [the modeling guide](docs/modeling.md) and the
+[Dragonfly g/r notebook](notebooks/dragonfly_gr_modeling.ipynb).

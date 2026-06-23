@@ -18,6 +18,9 @@ class LinearRelation:
     intercept: float
     scatter: float
     samples: int
+    slope_error: float = np.nan
+    intercept_error: float = np.nan
+    r_squared: float = np.nan
 
     def predict(self, values: np.ndarray) -> np.ndarray:
         return self.slope * values + self.intercept
@@ -31,6 +34,8 @@ def fit_linear_relation(
     method: str = "linear",
     clip_sigma: float = 4.0,
     max_iterations: int = 5,
+    bootstrap_samples: int = 0,
+    random_state: int | None = None,
 ) -> LinearRelation:
     """Fit a sigma-clipped linear relation."""
     x = np.asarray(x, dtype=float).ravel()
@@ -58,7 +63,24 @@ def fit_linear_relation(
     scatter = float(np.sqrt(np.mean(residual**2)))
     if not np.isfinite(slope) or np.isclose(slope, 0):
         raise ValueError("The fitted slope is zero or non-finite")
-    return LinearRelation(float(slope), float(intercept), scatter, int(valid.sum()))
+    variance = np.sum((y[valid] - np.mean(y[valid])) ** 2)
+    r_squared = 1 - np.sum(residual**2) / variance if variance > 0 else np.nan
+    slope_error, intercept_error = _bootstrap_errors(
+        x[valid],
+        y[valid],
+        method,
+        bootstrap_samples,
+        random_state,
+    )
+    return LinearRelation(
+        float(slope),
+        float(intercept),
+        scatter,
+        int(valid.sum()),
+        slope_error,
+        intercept_error,
+        float(r_squared),
+    )
 
 
 def _linear_coefficients(x: np.ndarray, y: np.ndarray, method: str) -> tuple[float, float]:
@@ -82,6 +104,24 @@ def _linear_coefficients(x: np.ndarray, y: np.ndarray, method: str) -> tuple[flo
     ) / denominator
     intercept = np.mean(y) - slope * np.mean(x)
     return float(slope), float(intercept)
+
+
+def _bootstrap_errors(x, y, method, samples, random_state):
+    if samples < 2:
+        return np.nan, np.nan
+    rng = np.random.default_rng(random_state)
+    if x.size > 50000:
+        selected = rng.choice(x.size, 50000, replace=False)
+        x = x[selected]
+        y = y[selected]
+    coefficients = np.empty((samples, 2))
+    for index in range(samples):
+        selected = rng.integers(0, x.size, x.size)
+        try:
+            coefficients[index] = _linear_coefficients(x[selected], y[selected], method)
+        except (ValueError, np.linalg.LinAlgError):
+            coefficients[index] = np.nan
+    return tuple(np.nanstd(coefficients, axis=0, ddof=1))
 
 
 def combine_luminance(maps: dict[str, np.ndarray], method: str) -> np.ndarray:
@@ -118,6 +158,8 @@ class MultiBandColorModel:
         regression: str = "bisector",
         mask: np.ndarray | None = None,
         iterations: int = 3,
+        bootstrap_samples: int = 0,
+        random_state: int | None = None,
     ) -> "MultiBandColorModel":
         """Fit Planck and inter-band color relations."""
         selected = tuple(images) if bands is None else tuple(bands)
@@ -144,8 +186,10 @@ class MultiBandColorModel:
                 planck_images[name].data,
                 mask=common_mask,
                 method=regression,
+                bootstrap_samples=bootstrap_samples,
+                random_state=None if random_state is None else random_state + index,
             )
-            for name in selected
+            for index, name in enumerate(selected)
         }
         initial = {
             name: (images[name].data - planck_relations[name].intercept)
@@ -167,12 +211,25 @@ class MultiBandColorModel:
                 for name in selected
             }
             reference_scale = relations[reference_band].slope
+            reference_error = relations[reference_band].slope_error
             relations = {
                 name: LinearRelation(
                     slope=relation.slope / reference_scale,
                     intercept=relation.intercept,
                     scatter=relation.scatter,
                     samples=relation.samples,
+                    slope_error=(
+                        0.0
+                        if name == reference_band
+                        else _ratio_error(
+                            relation.slope,
+                            relation.slope_error,
+                            reference_scale,
+                            reference_error,
+                        )
+                    ),
+                    intercept_error=relation.intercept_error,
+                    r_squared=relation.r_squared,
                 )
                 for name, relation in relations.items()
             }
@@ -223,8 +280,67 @@ class MultiBandColorModel:
             for name, relation in self.color_relations.items()
         }
 
+    def colors(self, source: str = "planck") -> dict[str, "ColorMeasurement"]:
+        """Return colors relative to the reference band."""
+        if source == "planck":
+            relations = self.planck_relations
+        elif source == "interband":
+            relations = self.color_relations
+        else:
+            raise ValueError("source must be 'planck' or 'interband'")
+        reference = relations[self.reference_band]
+        return {
+            f"{name}-{self.reference_band}": ColorMeasurement.from_relations(
+                name,
+                self.reference_band,
+                relation,
+                reference,
+                source,
+            )
+            for name, relation in relations.items()
+            if name != self.reference_band
+        }
+
+
+@dataclass(frozen=True)
+class ColorMeasurement:
+    """Cirrus color and uncertainty in magnitudes."""
+
+    band: str
+    reference_band: str
+    value: float
+    error: float
+    source: str
+
+    @classmethod
+    def from_relations(cls, band, reference_band, relation, reference, source):
+        if relation.slope <= 0 or reference.slope <= 0:
+            value = error = np.nan
+        else:
+            ratio = relation.slope / reference.slope
+            value = -2.5 * np.log10(ratio)
+            if np.isfinite(relation.slope_error) and np.isfinite(reference.slope_error):
+                relative_variance = (
+                    (relation.slope_error / relation.slope) ** 2
+                    + (reference.slope_error / reference.slope) ** 2
+                )
+                error = 2.5 / np.log(10) * np.sqrt(relative_variance)
+            else:
+                error = np.nan
+        return cls(band, reference_band, float(value), float(error), source)
+
+
+def _ratio_error(numerator, numerator_error, denominator, denominator_error):
+    if not np.isfinite(numerator_error) or not np.isfinite(denominator_error):
+        return np.nan
+    ratio = numerator / denominator
+    return abs(ratio) * np.sqrt(
+        (numerator_error / numerator) ** 2
+        + (denominator_error / denominator) ** 2
+    )
+
 
 __all__ = [
-    "LinearRelation", "MultiBandColorModel", "combine_luminance",
+    "ColorMeasurement", "LinearRelation", "MultiBandColorModel", "combine_luminance",
     "fit_linear_relation",
 ]
