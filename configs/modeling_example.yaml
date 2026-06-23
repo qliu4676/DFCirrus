@@ -49,6 +49,7 @@ morphology:
     angle_bins: auto
     median_filter_size: 3   # pixels on the working grid
     maskfill: true
+    infill_backend: maskfill # maskfill (default) or optional cloudcovfix
     infill_radius: 9        # pixels; positive odd integer
   # Used only when backend is rht_starlet.
   starlet:

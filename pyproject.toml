@@ -12,20 +12,24 @@ license = {file = "LICENSE"}
 authors = [{name = "Qing Liu", email = "qliu@strw.leidenuniv.nl"}]
 dependencies = [
   "astropy>=5",
-  "joblib",
-  "maskfill",
+  "joblib>=1.2",
+  "maskfill>=1.1.1",
   "matplotlib>=3.6",
   "numpy>=1.23",
+  "pandas>=1.5",
   "photutils>=1.9",
   "PyYAML>=6",
   "reproject>=0.10",
   "scikit-image>=0.20",
   "scikit-learn>=1.2",
   "scipy>=1.9",
-  "tqdm",
+  "tqdm>=4.65",
 ]
 
 [project.optional-dependencies]
+cloudcovfix = [
+  "cloudcovfix @ git+https://github.com/qliu4676/CloudCovFix.git",
+]
 sep = ["sep>=1.2"]
 test = ["pytest>=7", "pytest-cov>=4"]
 

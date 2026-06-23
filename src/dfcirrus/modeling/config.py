@@ -102,6 +102,7 @@ class RHTConfig:
     angle_bins: int | str = "auto"
     median_filter_size: int = 3
     maskfill: bool = True
+    infill_backend: str = "maskfill"
     infill_radius: int = 9
 
 
@@ -230,7 +231,7 @@ class ModelingConfig:
             rht_data,
             {
                 "radius", "response", "angle_bins", "median_filter_size",
-                "maskfill", "infill_radius",
+                "maskfill", "infill_backend", "infill_radius",
             },
             "morphology.rht",
         )
@@ -250,10 +251,15 @@ class ModelingConfig:
             angle_bins=angle_bins,
             median_filter_size=int(rht_data.get("median_filter_size", 3)),
             maskfill=bool(rht_data.get("maskfill", masks.infill_small_holes)),
+            infill_backend=str(rht_data.get("infill_backend", "maskfill")),
             infill_radius=infill_radius,
         )
         if rht.response not in {"peak", "percentile"}:
             raise ConfigurationError("morphology.rht.response must be 'peak' or 'percentile'")
+        if rht.infill_backend not in {"maskfill", "cloudcovfix"}:
+            raise ConfigurationError(
+                "morphology.rht.infill_backend must be 'maskfill' or 'cloudcovfix'"
+            )
 
         starlet_data = dict(morphology_data.get("starlet", {}))
         _require_keys(

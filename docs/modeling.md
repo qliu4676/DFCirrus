@@ -34,6 +34,7 @@ morphology:
   rht:
     radius: 2               # arcmin
     maskfill: true
+    infill_backend: maskfill # maskfill (default) or optional cloudcovfix
     infill_radius: 9        # pixels; positive odd integer
 ```
 
@@ -46,6 +47,7 @@ morphology:
   rht:
     radius: 2               # arcmin
     maskfill: true
+    infill_backend: maskfill # maskfill (default) or optional cloudcovfix
     infill_radius: 9        # pixels; positive odd integer
   starlet:
     scales: 5
@@ -57,6 +59,8 @@ morphology:
 Starlet scale numbers are one-based. The defaults omit the first detail scale
 and retain the remaining scales and coarse residual. With `backend: rht`, the
 starlet stage is not run. `maskfill` enables masked-pixel infilling and
+`infill_backend` selects the installed infilling implementation. It defaults to
+`maskfill`; selecting `cloudcovfix` requires the optional `cloudcovfix` package.
 `infill_radius` sets the odd-sized pixel window passed to the infilling method.
 
 ## Command line

@@ -88,6 +88,29 @@ def photutils_source_detection(data, mask=None, n_threshold=3, b_size=64, npixel
 
 default_kernel = np.array([[1,2,1], [2,4,2], [1,2,1]])
 
+
+def _infill_masked(image, mask, *, backend="maskfill", window_size=9):
+    """Infill masked pixels with the selected optional implementation."""
+    if backend == "maskfill":
+        filled, _ = maskfill(image, mask, size=window_size)
+        return filled
+    if backend == "cloudcovfix":
+        try:
+            from cloudcovfix import infill
+        except ImportError as exc:
+            raise ImportError(
+                "The 'cloudcovfix' infill backend was selected but cloudcovfix "
+                "is not installed. Install cloudcovfix or use the default "
+                "'maskfill' backend."
+            ) from exc
+        return infill(
+            image,
+            mask,
+            patch_size=max(3, window_size),
+            progress=False,
+        ).mean
+    raise ValueError(f"Unknown infill backend: {backend!r}")
+
 def _byteswap(arr):
     """
     If array is in big-endian byte order (as astropy.io.fits
@@ -306,6 +329,7 @@ def remove_compact_emission(image, mask=None,
                             use_output='residual',
                             n_threshold=None,
                             kernel_replace_masked=9,
+                            infill_backend='maskfill',
                             background_size=128,
                             source_extractor='photutils',
                             plot=False, figsize=(18, 6)):
@@ -419,10 +443,11 @@ def remove_compact_emission(image, mask=None,
         window_size = max(1, int(kernel_replace_masked))
         if window_size % 2 == 0:
             window_size += 1
-        image_proc, image_proc_unsmoothed = maskfill(
+        image_proc = _infill_masked(
             image_,
             np.isnan(image_),
-            size=window_size,
+            backend=infill_backend,
+            window_size=window_size,
         )
     else:
         image_proc = image_
