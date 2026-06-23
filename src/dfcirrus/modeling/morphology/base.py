@@ -84,10 +84,10 @@ def create_morphology_filter(config: MorphologyConfig, mask_config=None):
         from .rht import RHTFilter
 
         return RHTFilter(config, mask_config)
-    if config.backend == "starlet":
-        from .starlet import StarletFilter
+    if config.backend == "rht_starlet":
+        from .rht_starlet import RHTStarletFilter
 
-        return StarletFilter(config)
+        return RHTStarletFilter(config, mask_config)
     raise ValueError(f"Unknown morphology backend: {config.backend}")
 
 

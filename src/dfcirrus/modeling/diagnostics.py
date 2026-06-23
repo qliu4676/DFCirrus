@@ -53,13 +53,22 @@ def plot_interband_fits(result, *, max_points: int = 30000):
     return fig, axes
 
 
-def plot_morphology(result, *, max_panels: int = 6, cmap: str = "gray_r"):
+def plot_morphology(result, *, max_panels: int = 8, cmap: str = "gray_r"):
     """Plot morphology backend intermediates."""
     morphology = result.morphology_result
     if morphology is None:
         raise ValueError("No morphology diagnostics are available")
     components = morphology.components or {"filtered": morphology.image}
-    preferred = ("input", "smoothed", "response", "residual", "compact_mask", "filtered")
+    if morphology.backend == "rht_starlet":
+        preferred = (
+            "rht_input", "rht_response", "rht_residual", "rht_compact_mask",
+            "rht_filtered", "starlet_scale_1", "starlet_removed", "filtered",
+        )
+    else:
+        preferred = (
+            "input", "smoothed", "response", "residual", "compact_mask",
+            "filtered",
+        )
     names = [name for name in preferred if name in components]
     names.extend(name for name in components if name not in names)
     names = names[:max_panels]

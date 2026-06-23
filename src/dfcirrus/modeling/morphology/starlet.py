@@ -23,27 +23,12 @@ class StarletFilter:
             reference,
             self.config.working_pixel_scale,
         )
-        coefficients, coarse = starlet_transform(
+        filtered, components = reconstruct_starlet(
             grid.image,
             grid.mask,
-            self.config.starlet.scales,
+            self.config.starlet,
         )
-        selected = []
-        components = {"input": grid.image, "coarse": coarse}
-        for scale, coefficient in enumerate(coefficients, start=1):
-            component = coefficient.copy()
-            if self.config.starlet.threshold_sigma > 0:
-                noise = mad_std(component[~grid.mask], ignore_nan=True)
-                if np.isfinite(noise) and noise > 0:
-                    component[np.abs(component) < self.config.starlet.threshold_sigma * noise] = 0
-            components[f"scale_{scale}"] = component
-            if scale in self.config.starlet.keep_scales:
-                selected.append(component)
-
-        filtered = np.sum(selected, axis=0)
-        if self.config.starlet.include_coarse:
-            filtered = filtered + coarse
-        filtered[grid.mask] = np.nan
+        components = {"input": grid.image, **components}
         restored = restore_grid(filtered, grid, reference)
         restored[mask] = np.nan
         components["filtered"] = filtered
@@ -75,6 +60,28 @@ def starlet_transform(image, mask, scales):
     return coefficients, current
 
 
+def reconstruct_starlet(image, mask, config):
+    """Reconstruct selected starlet scales."""
+    coefficients, coarse = starlet_transform(image, mask, config.scales)
+    selected = []
+    components = {"coarse": coarse}
+    for scale, coefficient in enumerate(coefficients, start=1):
+        component = coefficient.copy()
+        if config.threshold_sigma > 0:
+            noise = mad_std(component[~mask], ignore_nan=True)
+            if np.isfinite(noise) and noise > 0:
+                component[np.abs(component) < config.threshold_sigma * noise] = 0
+        components[f"scale_{scale}"] = component
+        if scale in config.keep_scales:
+            selected.append(component)
+    filtered = np.sum(selected, axis=0)
+    if config.include_coarse:
+        filtered = filtered + coarse
+    filtered[mask] = np.nan
+    components["filtered"] = filtered
+    return filtered, components
+
+
 def _smooth_masked(image, valid, step):
     kernel = np.zeros(4 * step + 1)
     kernel[::step] = np.array([1, 4, 6, 4, 1], dtype=float) / 16
@@ -87,4 +94,4 @@ def _smooth_masked(image, valid, step):
     return result
 
 
-__all__ = ["StarletFilter", "starlet_transform"]
+__all__ = ["StarletFilter", "reconstruct_starlet", "starlet_transform"]

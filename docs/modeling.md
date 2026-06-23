@@ -30,23 +30,34 @@ RHT is the default backend:
 ```yaml
 morphology:
   backend: rht
+  working_pixel_scale: 2.5  # arcsec/pixel
+  rht:
+    radius: 2               # arcmin
+    maskfill: true
+    infill_radius: 9        # pixels; positive odd integer
 ```
 
-Starlet filtering is optional:
+The sequential backend applies starlet cleanup to the RHT result:
 
 ```yaml
 morphology:
-  backend: starlet
-  working_pixel_scale: 10
+  backend: rht_starlet
+  working_pixel_scale: 2.5  # arcsec/pixel
+  rht:
+    radius: 2               # arcmin
+    maskfill: true
+    infill_radius: 9        # pixels; positive odd integer
   starlet:
     scales: 5
-    keep_scales: [3, 4, 5]
+    keep_scales: [2, 3, 4, 5]
     threshold_sigma: 0
-    include_coarse: false
+    include_coarse: true
 ```
 
-Starlet scale numbers are one-based. The backend reconstructs the selected
-undecimated wavelet scales and restores the original mask.
+Starlet scale numbers are one-based. The defaults omit the first detail scale
+and retain the remaining scales and coarse residual. With `backend: rht`, the
+starlet stage is not run. `maskfill` enables masked-pixel infilling and
+`infill_radius` sets the odd-sized pixel window passed to the infilling method.
 
 ## Command line
 

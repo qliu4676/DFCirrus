@@ -21,12 +21,14 @@ alignment:
 
 morphology:
   backend: rht
-  working_pixel_scale: 10
+  working_pixel_scale: 2.5
   rht:
-    radius: 3
+    radius: 2
     response: peak
     angle_bins: auto
     median_filter_size: 3
+    maskfill: true
+    infill_radius: 9
 
 color:
   reference_band: r

@@ -38,9 +38,7 @@ class RHTFilter:
             2,
             int(round(self.config.rht.radius * 60.0 / self.config.working_pixel_scale)),
         )
-        infill_radius = 10 if self.mask_config is None else self.mask_config.maximum_infill_radius
-        fill_radius = max(1, int(round(infill_radius / self.config.working_pixel_scale)))
-        fill_mask = True if self.mask_config is None else self.mask_config.infill_small_holes
+        fill_mask = self.config.rht.maskfill
         filtered, details = remove_compact_emission(
             working_image,
             mask=grid.mask,
@@ -59,7 +57,7 @@ class RHTFilter:
             ),
             quantile=self.config.compact_rejection.quantile_fallback,
             fill_mask=fill_mask,
-            kernel_replace_masked=fill_radius,
+            kernel_replace_masked=self.config.rht.infill_radius,
         )
         restored = restore_grid(filtered, grid, reference)
         restored[mask] = np.nan
@@ -78,7 +76,12 @@ class RHTFilter:
             image=restored,
             backend="rht",
             components=components,
-            metadata={"radius_pixels": radius, "working_pixel_scale": self.config.working_pixel_scale},
+            metadata={
+                "radius_pixels": radius,
+                "working_pixel_scale": self.config.working_pixel_scale,
+                "maskfill": fill_mask,
+                "infill_radius": self.config.rht.infill_radius,
+            },
         )
 
 
