@@ -149,6 +149,7 @@ class ColorConfig:
     combine: str = "median"
     bootstrap_samples: int = 200
     fit_sigma_range: tuple[float, float] = (-15.0, 20.0)
+    low_dust_quantile: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -418,7 +419,7 @@ class ModelingConfig:
         color_data = dict(data.get("color", {}))
         _require_keys(
             color_data,
-            {"reference_band", "bands", "relation", "regression", "combine", "bootstrap_samples", "fit_sigma_range"},
+            {"reference_band", "bands", "relation", "regression", "combine", "bootstrap_samples", "fit_sigma_range", "low_dust_quantile"},
             "color",
         )
         color_bands = tuple(str(name) for name in color_data.get("bands", bands))
@@ -433,6 +434,9 @@ class ModelingConfig:
         sigma_range = tuple(float(value) for value in color_data.get("fit_sigma_range", (-15, 20)))
         if len(sigma_range) != 2 or sigma_range[0] >= sigma_range[1]:
             raise ConfigurationError("color.fit_sigma_range must contain increasing lower and upper values")
+        low_dust_quantile = float(color_data.get("low_dust_quantile", 0.0))
+        if not 0.0 <= low_dust_quantile < 1.0:
+            raise ConfigurationError("color.low_dust_quantile must be in [0, 1)")
         color = ColorConfig(
             reference_band=color_reference,
             bands=color_bands,
@@ -441,6 +445,7 @@ class ModelingConfig:
             combine=str(color_data.get("combine", "median")),
             bootstrap_samples=int(color_data.get("bootstrap_samples", 200)),
             fit_sigma_range=sigma_range,
+            low_dust_quantile=low_dust_quantile,
         )
         if color.relation != "linear":
             raise ConfigurationError("color.relation must be 'linear'")

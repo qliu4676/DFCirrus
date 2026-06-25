@@ -15,9 +15,16 @@ def plot_planck_fits(result, *, max_points: int = 30000):
     for axis, name in zip(axes[0], bands):
         x = result.planck_map
         y = result.planck_images[name].data
-        valid = ~result.fit_mask & np.isfinite(x) & np.isfinite(y)
+        finite = np.isfinite(x) & np.isfinite(y)
+        excluded = result.fit_mask & finite
+        xe, ye = _sample_pair(x[excluded], y[excluded], max_points)
+        axis.scatter(
+            xe, ye, s=2, alpha=0.12, color="0.6", rasterized=True,
+            label="Excluded",
+        )
+        valid = ~result.fit_mask & finite
         xs, ys = _sample_pair(x[valid], y[valid], max_points)
-        axis.scatter(xs, ys, s=2, alpha=0.15, rasterized=True)
+        axis.scatter(xs, ys, s=2, alpha=0.18, rasterized=True, label="Fit sample")
         relation = result.planck_relations[name]
         grid = np.linspace(np.nanmin(xs), np.nanmax(xs), 200)
         axis.plot(grid, relation.predict(grid), color="tab:red", lw=2)
@@ -26,6 +33,7 @@ def plot_planck_fits(result, *, max_points: int = 30000):
             xlabel=r"Planck radiance $\times 10^7$",
             ylabel=f"{name} [kJy/sr]",
         )
+        axis.legend(loc="best", markerscale=3, fontsize="small")
     fig.tight_layout()
     return fig, axes
 

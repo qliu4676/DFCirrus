@@ -200,6 +200,12 @@ class MultiBandModeler:
 
     def _fit_mask(self, images: ImageCollection, planck_map: np.ndarray) -> np.ndarray:
         mask = images.combined_mask("union") | ~np.isfinite(planck_map)
+        quantile = self.config.color.low_dust_quantile
+        if quantile > 0:
+            valid_planck = np.isfinite(planck_map) & ~images.combined_mask("union")
+            if np.any(valid_planck):
+                low_dust_limit = np.nanquantile(planck_map[valid_planck], quantile)
+                mask |= planck_map < low_dust_limit
         lower, upper = self.config.color.fit_sigma_range
         for image in images.values():
             valid = ~image.mask & np.isfinite(image.data)

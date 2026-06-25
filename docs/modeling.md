@@ -62,15 +62,15 @@ morphology:
 ```
 
 Starlet scale numbers are one-based. The defaults omit the first detail scale
-and retain the remaining scales and coarse residual. With `backend: rht`, the
-starlet stage is not run. Morphology-level `infill.enabled` controls masked-pixel
-infilling for either backend. `infill.backend` defaults to `maskfill`; selecting
-`cloudcovfix` requires the optional `cloudcovfix` package. CloudCovFix uses
-`patch_size`, `training_window`, `conditioning_radius`, and `memory_budget_mb`.
-The first three are measured in pixels. At runtime, `patch_size` is increased to
-the smallest odd width larger than the maximum bounding-box extent of any
-connected mask component. CloudCovFix uses `run.random_seed`, matching the color
-fit and other stochastic modeling steps.
+and retain the remaining scales and coarse residual.
+
+Morphology-level `infill.enabled` controls masked-pixel infilling for either backend. 
+`infill.backend` defaults to `maskfill`; selecting `cloudcovfix` requires the 
+optional `cloudcovfix` package. 
+
+CloudCovFix uses `patch_size`, `training_window`, `conditioning_radius` in pixels, and 
+`memory_budget_mb`. At runtime, `patch_size` is increased to the smallest odd width 
+larger than the maximum bounding-box extent of any connected mask component.
 
 ## Command line
 

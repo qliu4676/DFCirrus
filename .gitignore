@@ -54,6 +54,7 @@ coverage.xml
 
 # Local test suite
 /tests/
+/results/
 
 # Translations
 *.mo
