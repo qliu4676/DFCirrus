@@ -91,17 +91,97 @@ default_kernel = np.array([[1,2,1], [2,4,2], [1,2,1]])
 
 def _maximum_connected_mask_extent(mask):
     """Return the largest row/column span of an 8-connected mask component."""
+    components = _connected_mask_components(mask)
+    if not components:
+        return 0
+    return max(component["extent"] for component in components)
+
+
+def _connected_mask_components(mask):
+    """Return 8-connected mask components sorted from largest to smallest."""
     labels, count = ndimage.label(
         np.asarray(mask, dtype=bool),
         structure=np.ones((3, 3), dtype=int),
     )
     if count == 0:
-        return 0
-    return max(
-        max(region[axis].stop - region[axis].start for axis in (0, 1))
-        for region in ndimage.find_objects(labels)
-        if region is not None
-    )
+        return []
+    components = []
+    for label, region in enumerate(ndimage.find_objects(labels), start=1):
+        if region is None:
+            continue
+        component_mask = labels[region] == label
+        area = int(np.count_nonzero(component_mask))
+        extent = max(region[axis].stop - region[axis].start for axis in (0, 1))
+        components.append(
+            {
+                "label": label,
+                "slice": region,
+                "area": area,
+                "extent": int(extent),
+            }
+        )
+    return sorted(components, key=lambda item: (item["extent"], item["area"]), reverse=True)
+
+
+def _component_mask(labels, component):
+    """Return a full-sized boolean mask for one labeled component."""
+    result = np.zeros(labels.shape, dtype=bool)
+    region = component["slice"]
+    result[region] = labels[region] == component["label"]
+    return result
+
+
+def _next_odd_at_least(value):
+    """Return the smallest odd integer greater than or equal to value."""
+    result = int(np.ceil(value))
+    if result % 2 == 0:
+        result += 1
+    return result
+
+
+def _next_odd_greater_than(value):
+    """Return the smallest odd integer strictly greater than value."""
+    return _next_odd_at_least(int(value) + 1)
+
+
+def _spawn_infill_random_states(random_state, count):
+    """Derive deterministic per-stage random states from one parent seed."""
+    if count <= 0:
+        return []
+    if random_state is None:
+        return [None] * count
+    if isinstance(random_state, np.random.Generator):
+        return [
+            int(value)
+            for value in random_state.integers(0, np.iinfo(np.uint32).max, size=count)
+        ]
+    seed_sequence = np.random.SeedSequence(random_state)
+    return [
+        int(child.generate_state(1, dtype=np.uint32)[0])
+        for child in seed_sequence.spawn(count)
+    ]
+
+
+def _cloudcovfix_stage_options(base_options, *, patch_size=None, random_state=None):
+    """Return CloudCovFix options for one staged infill call."""
+    options = dict(base_options)
+    if patch_size is not None:
+        effective_patch_size = _next_odd_at_least(patch_size)
+        options["patch_size"] = effective_patch_size
+        options["training_window"] = _next_odd_at_least(
+            max(int(options["training_window"]), effective_patch_size)
+        )
+        options["conditioning_radius"] = effective_patch_size // 2
+    if random_state is not None:
+        options["random_state"] = random_state
+    options["progress"] = True
+    return options
+
+
+def _call_cloudcovfix_infill(infill, image, mask, options):
+    """Call CloudCovFix and return the posterior mean image."""
+    result = infill(image, mask, **options)
+    return np.asarray(result.mean, dtype=float)
 
 
 def _infill_masked(
@@ -140,30 +220,133 @@ def _infill_masked(
         }
         options.update(cloudcovfix_kwargs or {})
         logger.info("Infilling masked pixels with CloudCovFix")
-        component_extent = _maximum_connected_mask_extent(mask)
+        mask = np.asarray(mask, dtype=bool)
+        components = _connected_mask_components(mask)
+        component_extent = max((component["extent"] for component in components), default=0)
         configured_patch_size = int(options["patch_size"])
-        effective_patch_size = max(configured_patch_size, component_extent + 1)
-        if effective_patch_size % 2 == 0:
-            effective_patch_size += 1
-        if effective_patch_size != configured_patch_size:
-            effective_radius = effective_patch_size // 2
-            logger.info(
-                f"Increasing CloudCovFix patch_size from {configured_patch_size} "
-                f"to {effective_patch_size} pixels to exceed the largest "
-                f"connected mask extent ({component_extent} pixels); setting "
-                f"conditioning_radius to {effective_radius} pixels"
-            )
-            options["conditioning_radius"] = effective_radius
-        options["patch_size"] = effective_patch_size
-        options["progress"] = True
-        result = infill(
-            image,
-            mask,
-            **options,
+
+        maskfill_options = {"size": 9}
+        maskfill_options.update(maskfill_kwargs or {})
+        logger.info(
+            "Prefilling masked pixels with maskfill before staged CloudCovFix "
+            f"(small components up to {maskfill_options['size']} pixels)"
         )
-        return result.mean, {
+        filled, _ = maskfill(image, mask, **maskfill_options)
+        filled = np.asarray(filled, dtype=float)
+
+        labels, _ = ndimage.label(mask, structure=np.ones((3, 3), dtype=int))
+        small_components = [
+            component
+            for component in components
+            if component["extent"] <= int(maskfill_options["size"])
+        ]
+        intermediate_components = [
+            component
+            for component in components
+            if int(maskfill_options["size"]) < component["extent"] < configured_patch_size
+        ]
+        large_components = [
+            component
+            for component in components
+            if component["extent"] >= configured_patch_size
+        ]
+
+        stage_count = int(bool(intermediate_components)) + len(large_components)
+        stage_random_states = iter(
+            _spawn_infill_random_states(options.get("random_state"), stage_count)
+        )
+        stages = [
+            {
+                "backend": "maskfill",
+                "component_count": len(small_components),
+                "maximum_component_extent": max(
+                    (component["extent"] for component in small_components),
+                    default=0,
+                ),
+                "maskfill_kwargs": dict(maskfill_options),
+            }
+        ]
+
+        if intermediate_components:
+            intermediate_mask = np.zeros(mask.shape, dtype=bool)
+            for component in intermediate_components:
+                intermediate_mask |= _component_mask(labels, component)
+            stage_image = filled.copy()
+            stage_image[intermediate_mask] = np.nan
+            stage_options = _cloudcovfix_stage_options(
+                options,
+                random_state=next(stage_random_states),
+            )
+            logger.info(
+                "Filling intermediate mask components with CloudCovFix default "
+                f"parameters: {len(intermediate_components)} components, "
+                f"maximum extent {max(component['extent'] for component in intermediate_components)} pixels"
+            )
+            stage_result = _call_cloudcovfix_infill(
+                infill,
+                stage_image,
+                intermediate_mask,
+                stage_options,
+            )
+            filled[intermediate_mask] = stage_result[intermediate_mask]
+            stages.append(
+                {
+                    "backend": "cloudcovfix",
+                    "stage": "intermediate",
+                    "component_count": len(intermediate_components),
+                    "maximum_component_extent": max(
+                        component["extent"] for component in intermediate_components
+                    ),
+                    "cloudcovfix_kwargs": dict(stage_options),
+                }
+            )
+
+        for component in large_components:
+            large_mask = _component_mask(labels, component)
+            stage_image = filled.copy()
+            stage_image[large_mask] = np.nan
+            effective_patch_size = _next_odd_greater_than(component["extent"])
+            stage_options = _cloudcovfix_stage_options(
+                options,
+                patch_size=effective_patch_size,
+                random_state=next(stage_random_states),
+            )
+            logger.info(
+                f"Filling large mask component label {component['label']} with "
+                f"CloudCovFix patch_size {stage_options['patch_size']} pixels "
+                f"and conditioning_radius {stage_options['conditioning_radius']} pixels "
+                f"to exceed component extent {component['extent']} pixels"
+            )
+            stage_result = _call_cloudcovfix_infill(
+                infill,
+                stage_image,
+                large_mask,
+                stage_options,
+            )
+            filled[large_mask] = stage_result[large_mask]
+            stages.append(
+                {
+                    "backend": "cloudcovfix",
+                    "stage": "large",
+                    "component_count": 1,
+                    "component_label": component["label"],
+                    "maximum_component_extent": component["extent"],
+                    "cloudcovfix_kwargs": dict(stage_options),
+                }
+            )
+
+        cloudcovfix_stage_kwargs = [
+            stage["cloudcovfix_kwargs"]
+            for stage in stages
+            if stage["backend"] == "cloudcovfix"
+        ]
+        return filled, {
             "backend": "cloudcovfix",
-            "cloudcovfix_kwargs": dict(options),
+            "maskfill_kwargs": dict(maskfill_options),
+            "cloudcovfix_kwargs": (
+                dict(cloudcovfix_stage_kwargs[-1]) if cloudcovfix_stage_kwargs else None
+            ),
+            "cloudcovfix_stages": stages,
             "configured_patch_size": configured_patch_size,
             "maximum_mask_component_extent": component_extent,
         }

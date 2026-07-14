@@ -15,6 +15,7 @@ from .config import ModelingConfig, load_config
 from .data import ImageCollection
 from .image import PlanckImage
 from .morphology import MorphologyResult, create_morphology_filter
+from .utils import _infill_masked
 
 
 MorphologyFilter = Callable[[np.ndarray, np.ndarray], np.ndarray | tuple[np.ndarray, object]]
@@ -170,14 +171,35 @@ class MultiBandModeler:
             raise ValueError("The morphology filter changed the image shape")
         filtered_luminance[mask] = np.nan
 
-        models = color.predict(filtered_luminance)
+        model_luminance = filtered_luminance
+        model_mask = mask | ~np.isfinite(model_luminance)
+        if self.config.morphology.infill.enabled and np.any(model_mask):
+            infill = self.config.morphology.infill
+            model_luminance, infill_metadata = _infill_masked(
+                model_luminance,
+                model_mask,
+                backend=infill.backend,
+                maskfill_kwargs={"size": infill.maskfill_window_size},
+                cloudcovfix_kwargs={
+                    "patch_size": infill.patch_size,
+                    "training_window": infill.training_window,
+                    "conditioning_radius": infill.conditioning_radius,
+                    "memory_budget_mb": infill.memory_budget_mb,
+                    "random_state": self.config.run.random_seed,
+                },
+            )
+            model_luminance = np.asarray(model_luminance, dtype=float)
+            if morphology_result is not None:
+                morphology_result.metadata["model_luminance_infill"] = infill_metadata
+        if not np.all(np.isfinite(model_luminance)):
+            raise ValueError("DFCirrus morphology infill left non-finite model luminance pixels")
+
+        models = color.predict(model_luminance)
         offsets = color.offsets()
         residuals = {
             name: images[name].data - offsets[name] - models[name]
             for name in color.bands
         }
-        for values in models.values():
-            values[mask] = np.nan
         for name, values in residuals.items():
             values[mask | images[name].mask] = np.nan
 
